@@ -1,6 +1,14 @@
 import { useEffect, useState } from "react";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Login from "./Login.jsx";
 import UsersPage from "./UsersPage.jsx";
+import ProductsPage from "./ProductsPage.jsx"; // ← único import
+import AdminLayout from "./layouts/AdminLayout.jsx";
+import AdminDashboard from "./pages/AdminDashboard.jsx";
+import EmployeeLayout from "./layouts/EmployeeLayout.jsx";
+import EmployeeDashboard from "./pages/EmployeeDashboard.jsx";
+import SalesPage from "./SalesPage.jsx";
+
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
@@ -9,13 +17,14 @@ export default function App() {
   const [token, setToken] = useState("");
   const [loading, setLoading] = useState(true);
 
-  // Leer token guardado y validarlo
   useEffect(() => {
     const t = localStorage.getItem("token");
     if (!t) { setLoading(false); return; }
     (async () => {
       try {
-        const res = await fetch(`${API}/api/profile`, { headers: { Authorization: `Bearer ${t}` } });
+        const res = await fetch(`${API}/api/profile`, {
+          headers: { Authorization: `Bearer ${t}` },
+        });
         const body = await res.json();
         if (!res.ok) throw new Error();
         setUser(body.user);
@@ -42,25 +51,32 @@ export default function App() {
 
   if (loading) return <p style={{ padding: 16 }}>Cargando...</p>;
 
-  if (!user) {
-    return <Login onSuccess={handleLogin} />;
-  }
-
   return (
-    <div style={{ padding: 16 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <h3>Bienvenido, {user.nombre_completo} ({user.rol})</h3>
-        <button onClick={logout} style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #e5e7eb" }}>Salir</button>
-      </div>
-
-      {user.rol === "administrador" ? (
-        <UsersPage token={token} />
+    <BrowserRouter>
+      {!user ? (
+        <Routes>
+          <Route path="*" element={<Login onSuccess={handleLogin} />} />
+        </Routes>
+      ) : user.rol === "administrador" ? (
+        <Routes>
+          <Route path="/admin" element={<AdminLayout user={user} onLogout={logout} />}>
+            <Route index element={<AdminDashboard token={token} />} />
+            <Route path="usuarios" element={<UsersPage token={token} />} />{/* admin usuarios */}
+            <Route path="productos" element={<ProductsPage token={token} />} /> {/* admin productos */}
+            <Route path="ventas" element={<SalesPage token={token} />} /> {/* admin ventas */}
+          </Route>
+          <Route path="*" element={<Navigate to="/admin" replace />} />
+        </Routes>
       ) : (
-        <div style={{ background: "white", border: "1px solid #e5e7eb", borderRadius: 12, padding: 16 }}>
-          <h2>Panel de empleado</h2>
-          <p>Hola {user.nombre_completo}, este es tu panel de empleado.</p>
-        </div>
+        <Routes>
+          <Route path="/empleado" element={<EmployeeLayout user={user} onLogout={logout} />}>
+            <Route index element={<EmployeeDashboard token={token} user={user} />} />{/* empleado dashboard */}
+            <Route path="productos" element={<ProductsPage token={token} />} /> {/* empleado productos */}
+            <Route path="ventas" element={<SalesPage token={token} />} /> {/* empleado ventas */}
+          </Route>
+          <Route path="*" element={<Navigate to="/empleado" replace />} />
+        </Routes>
       )}
-    </div>
+    </BrowserRouter>
   );
 }

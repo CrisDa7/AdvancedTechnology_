@@ -6,6 +6,7 @@ export default function UsersPage({ token }) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [open, setOpen] = useState(false); // modal
   const [form, setForm] = useState({
     nombre_completo: "",
     usuario: "",
@@ -75,6 +76,16 @@ export default function UsersPage({ token }) {
     setForm((f) => ({ ...f, [name]: value }));
   };
 
+  const resetForm = () => setForm({
+    nombre_completo: "",
+    usuario: "",
+    contrasena: "",
+    celular: "",
+    cedula: "",
+    rol: "empleado",
+    estado: "activo",
+  });
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     const errs = validate();
@@ -95,15 +106,8 @@ export default function UsersPage({ token }) {
         throw new Error(body?.error || "Error al crear usuario");
       }
       setUsers((u) => [body, ...u]);
-      setForm({
-        nombre_completo: "",
-        usuario: "",
-        contrasena: "",
-        celular: "",
-        cedula: "",
-        rol: "empleado",
-        estado: "activo",
-      });
+      resetForm();
+      setOpen(false); // cerrar modal
     } catch (e) {
       setError(e.message || "Error al crear usuario");
     } finally {
@@ -120,68 +124,21 @@ export default function UsersPage({ token }) {
   }
 
   return (
-    <div style={{ maxWidth: 1000, margin: "0 auto", padding: 20, background: "#f0f4ff", minHeight: "100vh" }}>
+    <div style={{ maxWidth: 1000, margin: "0 auto", padding: 20, background: "#eef2ff", minHeight: "100vh" }}>
       <h1 style={{ fontSize: 28, marginBottom: 8, color: "#1e3a8a" }}>Usuarios</h1>
       <p style={{ color: "#555", marginBottom: 16 }}>
         API: <code>{API}</code>
       </p>
 
-      {/* Formulario */}
-      <form onSubmit={handleSubmit} style={card}>
-        <h2 style={{ marginTop: 0, color: "#1e40af" }}>Nuevo usuario</h2>
-        {error && <div style={alert}>{error}</div>}
-
-        <div style={grid2}>
-          <Field label="Nombre completo" htmlFor="nombre_completo">
-            <input id="nombre_completo" name="nombre_completo" value={form.nombre_completo} onChange={handleChange} style={input} />
-          </Field>
-          <Field label="Usuario" htmlFor="usuario">
-            <input id="usuario" name="usuario" value={form.usuario} onChange={handleChange} style={input} />
-          </Field>
-        </div>
-
-        <div style={grid2}>
-          <Field label="Contraseña" htmlFor="contrasena">
-            <input id="contrasena" name="contrasena" type="password" value={form.contrasena} onChange={handleChange} style={input} />
-          </Field>
-          <Field label="Celular" htmlFor="celular">
-            <input id="celular" name="celular" value={form.celular} onChange={handleChange} style={input} />
-          </Field>
-        </div>
-
-        <div style={grid2}>
-          <Field label="Cédula" htmlFor="cedula">
-            <input id="cedula" name="cedula" value={form.cedula} onChange={handleChange} style={input} />
-          </Field>
-          <Field label="Rol" htmlFor="rol">
-            <select id="rol" name="rol" value={form.rol} onChange={handleChange} style={input}>
-              <option value="empleado">Empleado</option>
-              <option value="administrador">Administrador</option>
-            </select>
-          </Field>
-        </div>
-
-        <Field label="Estado" htmlFor="estado">
-          <select id="estado" name="estado" value={form.estado} onChange={handleChange} style={input}>
-            <option value="activo">Activo</option>
-            <option value="inactivo">Inactivo</option>
-            <option value="dado de baja">Dado de baja</option>
-          </select>
-        </Field>
-
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
-          <button type="submit" disabled={submitting} style={buttonBlue}>
-            {submitting ? "Guardando..." : "Guardar"}
-          </button>
-          <button type="button" onClick={() => setForm({ nombre_completo: "", usuario: "", contrasena: "", celular: "", cedula: "", rol: "empleado", estado: "activo" })} style={buttonGray}>
-            Limpiar
-          </button>
-        </div>
-      </form>
+      {/* Acciones */}
+      <div style={{ ...card, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h2 style={{ margin: 0, color: "#1e40af" }}>Gestión de usuarios</h2>
+        <button style={buttonBlue} onClick={() => { setError(""); setOpen(true); }}>Agregar usuario</button>
+      </div>
 
       {/* Tabla */}
-      <div style={{ ...card, marginTop: 20 }}>
-        <h2 style={{ marginTop: 0, color: "#1e40af" }}>Listado</h2>
+      <div style={{ ...card, marginTop: 16 }}>
+        <h3 style={{ marginTop: 0, color: "#1e40af" }}>Listado</h3>
         {loading ? (
           <p>Cargando...</p>
         ) : users.length === 0 ? (
@@ -219,6 +176,69 @@ export default function UsersPage({ token }) {
           </div>
         )}
       </div>
+
+      {/* MODAL */}
+      {open && (
+        <div style={backdrop}>
+          <div style={modal} role="dialog" aria-modal>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <h3 style={{ margin: 0 }}>Agregar usuario</h3>
+              <button onClick={() => setOpen(false)} style={buttonGhost}>✕</button>
+            </div>
+
+            {error && <div style={alert}>{error}</div>}
+
+            <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12 }}>
+              <div style={grid2}>
+                <Field label="Nombre completo" htmlFor="nombre_completo">
+                  <input id="nombre_completo" name="nombre_completo" value={form.nombre_completo} onChange={handleChange} style={input} />
+                </Field>
+                <Field label="Usuario" htmlFor="usuario">
+                  <input id="usuario" name="usuario" value={form.usuario} onChange={handleChange} style={input} />
+                </Field>
+              </div>
+
+              <div style={grid2}>
+                <Field label="Contraseña" htmlFor="contrasena">
+                  <input id="contrasena" name="contrasena" type="password" value={form.contrasena} onChange={handleChange} style={input} />
+                </Field>
+                <Field label="Celular (10 dígitos)" htmlFor="celular">
+                  <input id="celular" name="celular" value={form.celular} onChange={handleChange} style={input} />
+                </Field>
+              </div>
+
+              <div style={grid2}>
+                <Field label="Cédula (10 dígitos)" htmlFor="cedula">
+                  <input id="cedula" name="cedula" value={form.cedula} onChange={handleChange} style={input} />
+                </Field>
+                <Field label="Rol" htmlFor="rol">
+                  <select id="rol" name="rol" value={form.rol} onChange={handleChange} style={input}>
+                    <option value="empleado">Empleado</option>
+                    <option value="administrador">Administrador</option>
+                  </select>
+                </Field>
+              </div>
+
+              <Field label="Estado" htmlFor="estado">
+                <select id="estado" name="estado" value={form.estado} onChange={handleChange} style={input}>
+                  <option value="activo">Activo</option>
+                  <option value="inactivo">Inactivo</option>
+                  <option value="dado de baja">Dado de baja</option>
+                </select>
+              </Field>
+
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <button type="button" onClick={() => { setOpen(false); resetForm(); setError(""); }} style={buttonGray}>
+                  Cancelar
+                </button>
+                <button type="submit" disabled={submitting} style={buttonBlue}>
+                  {submitting ? "Guardando..." : "Guardar"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -266,7 +286,7 @@ const buttonBlue = {
   padding: "10px 14px",
   borderRadius: 8,
   border: "none",
-  background: "#2563eb",
+  background: "#1d4ed8",
   color: "white",
   cursor: "pointer",
 };
@@ -280,7 +300,35 @@ const buttonGray = {
   cursor: "pointer",
 };
 
+const buttonGhost = {
+  padding: "6px 10px",
+  borderRadius: 8,
+  border: "1px solid #e5e7eb",
+  background: "white",
+  color: "#111827",
+  cursor: "pointer",
+};
+
 const table = {
   width: "100%",
   borderCollapse: "collapse",
+};
+
+const backdrop = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.5)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 16,
+};
+
+const modal = {
+  background: "white",
+  borderRadius: 12,
+  border: "1px solid #e5e7eb",
+  width: "min(720px, 100%)",
+  padding: 16,
+  boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
 };
