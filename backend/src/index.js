@@ -10,7 +10,7 @@ const app = express();
 // CORS: solo tu frontend
 app.use(cors({
   origin: 'http://localhost:5173',
-  methods: ['GET','POST','PATCH','PUT','DELETE','OPTIONS'],
+  methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 app.use(express.json());
@@ -35,6 +35,7 @@ function auth(req, res, next) {
     return res.status(401).json({ ok: false, error: 'Token inválido' });
   }
 }
+
 function requireAdmin(req, res, next) {
   if (req.user?.rol !== 'administrador') {
     return res.status(403).json({ ok: false, error: 'Solo administradores' });
@@ -49,7 +50,6 @@ function requireRole(...roles) {
     next();
   };
 }
-
 
 // Health
 app.get('/health', (req, res) => {
@@ -67,7 +67,7 @@ app.get('/db-time', async (req, res) => {
   }
 });
 
-// LOGIN
+// LOGIN (users -> servicios)
 app.post('/api/login', async (req, res) => {
   try {
     const { usuario, contrasena } = req.body;
@@ -75,37 +75,66 @@ app.post('/api/login', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Usuario y contraseña son obligatorios' });
     }
 
-    const { rows } = await pool.query(
+    // 1) Intentar en USERS (admin/empleado/cliente)
+    const { rows: urows } = await pool.query(
       'SELECT id, nombre_completo, usuario, contrasena, rol, estado, fecha_registro FROM users WHERE usuario = $1 LIMIT 1',
       [usuario]
     );
-    const user = rows[0];
-    if (!user) return res.status(401).json({ ok: false, error: 'Credenciales inválidas' });
+    const u = urows[0];
 
-    let ok = false;
-    if (isHash(user.contrasena)) {
-      ok = await bcrypt.compare(contrasena, user.contrasena);
-    } else {
-      // Soporta los que quedaron en texto plano y re-hashea al vuelo si coincide
-      ok = contrasena === user.contrasena;
-      if (ok) {
-        const newHash = await bcrypt.hash(contrasena, 10);
-        await pool.query('UPDATE users SET contrasena=$1 WHERE id=$2', [newHash, user.id]);
+    if (u) {
+      let ok = false;
+      if (typeof u.contrasena === 'string' && u.contrasena.startsWith('$2')) {
+        ok = await bcrypt.compare(contrasena, u.contrasena);
+      } else {
+        ok = contrasena === u.contrasena;
+        if (ok) {
+          const newHash = await bcrypt.hash(contrasena, 10);
+          await pool.query('UPDATE users SET contrasena=$1 WHERE id=$2', [newHash, u.id]);
+        }
       }
-    }
-    if (!ok) return res.status(401).json({ ok: false, error: 'Credenciales inválidas' });
+      if (!ok) return res.status(401).json({ ok: false, error: 'Credenciales inválidas' });
 
-    const token = signToken({ id: user.id, nombre: user.nombre_completo, rol: user.rol });
-    res.json({
+      const token = signToken({ id: u.id, usuario: u.usuario, nombre: u.nombre_completo, rol: u.rol });
+      return res.json({
+        ok: true,
+        token,
+        user: {
+          id: u.id,
+          nombre_completo: u.nombre_completo,
+          usuario: u.usuario,
+          rol: u.rol,
+          estado: u.estado,
+          fecha_registro: u.fecha_registro,
+        },
+      });
+    }
+
+    // 2) Si no está en users, intentar como CLIENTE en SERVICIOS (texto plano)
+    //    Buscamos una fila que coincida usuario + contraseña y tomamos la más reciente
+    const { rows: srows } = await pool.query(
+      `SELECT id, nombre_completo, usuario, contrasena, fecha_recepcion
+       FROM servicios
+       WHERE usuario = $1 AND contrasena = $2
+       ORDER BY fecha_recepcion DESC
+       LIMIT 1`,
+      [usuario, contrasena]
+    );
+    const s = srows[0];
+    if (!s) return res.status(401).json({ ok: false, error: 'Credenciales inválidas' });
+
+    // Firmamos como CLIENTE (rol='cliente')
+    const token = signToken({ id: s.id, usuario: s.usuario, nombre: s.nombre_completo, rol: 'cliente' });
+    return res.json({
       ok: true,
       token,
       user: {
-        id: user.id,
-        nombre_completo: user.nombre_completo,
-        usuario: user.usuario,
-        rol: user.rol,
-        estado: user.estado,
-        fecha_registro: user.fecha_registro,
+        id: s.id,
+        nombre_completo: s.nombre_completo,
+        usuario: s.usuario,
+        rol: 'cliente',
+        estado: 'activo',                // no hay estado de cuenta en servicios; asumimos activo
+        fecha_registro: s.fecha_recepcion, // usamos fecha del último servicio
       },
     });
   } catch (err) {
@@ -114,9 +143,35 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// Perfil (verifica token y devuelve usuario actualizado)
+
+// Perfil (admin/empleado desde users, cliente desde servicios)
 app.get('/api/profile', auth, async (req, res) => {
   try {
+    if (req.user.rol === 'cliente') {
+      const { rows } = await pool.query(
+        `SELECT id, nombre_completo, usuario, fecha_recepcion
+         FROM servicios
+         WHERE usuario = $1
+         ORDER BY fecha_recepcion DESC
+         LIMIT 1`,
+        [req.user.usuario]
+      );
+      const s = rows[0];
+      if (!s) return res.status(404).json({ ok: false, error: 'Cliente no encontrado' });
+      return res.json({
+        ok: true,
+        user: {
+          id: s.id,
+          nombre_completo: s.nombre_completo,
+          usuario: s.usuario,
+          rol: 'cliente',
+          estado: 'activo',
+          fecha_registro: s.fecha_recepcion,
+        },
+      });
+    }
+
+    // Ramas admin/empleado: siguen igual
     const { rows } = await pool.query(
       'SELECT id, nombre_completo, usuario, rol, estado, fecha_registro FROM users WHERE id = $1',
       [req.user.id]
@@ -129,6 +184,7 @@ app.get('/api/profile', auth, async (req, res) => {
     res.status(500).json({ ok: false, error: 'Error obteniendo perfil' });
   }
 });
+
 
 // Listar usuarios — solo admin
 app.get('/api/users', auth, requireAdmin, async (req, res) => {
@@ -240,9 +296,9 @@ app.post('/api/productos', auth, requireRole('administrador', 'empleado'), async
       return res.status(400).json({ ok: false, error: 'Faltan campos obligatorios' });
     }
 
-    precio_compra  = Number(precio_compra);
-    precio_venta   = Number(precio_venta);
-    stock_inicial  = Number(stock_inicial);
+    precio_compra = Number(precio_compra);
+    precio_venta = Number(precio_venta);
+    stock_inicial = Number(stock_inicial);
 
     if (Number.isNaN(precio_compra) || precio_compra < 0) {
       return res.status(400).json({ ok: false, error: 'precio_compra inválido' });
@@ -360,6 +416,148 @@ app.get('/api/ventas', auth, requireRole('administrador', 'empleado'), async (re
     res.status(500).json({ ok: false, error: 'Error al obtener ventas' });
   }
 });
+// ===================== SERVICIOS =====================
+
+// Listar servicios (últimos 100)
+app.get('/api/servicios', auth, requireRole('administrador', 'empleado'), async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT id, codigo,
+             nombre_completo, usuario, ciudad, telefono, cedula, direccion, rol,
+             fecha_recepcion, tipo_equipo, modelo, descripcion_equipo, proceso,
+             valor_total, pago_tipo, monto_abono, valor_restante, estado
+      FROM servicios
+      ORDER BY fecha_recepcion DESC
+      LIMIT 100
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ ok: false, error: 'Error al obtener servicios' });
+  }
+});
+
+
+// Crear servicio
+app.post('/api/servicios', auth, requireRole('administrador', 'empleado'), async (req, res) => {
+  try {
+    let {
+      nombre_completo, usuario, contrasena, ciudad, telefono, cedula, direccion,
+      tipo_equipo, modelo, descripcion_equipo, proceso,
+      valor_total, pago_tipo, monto_abono, observaciones
+    } = req.body;
+
+    // Validación mínima (el resto lo asegura Postgres con CHECK)
+    const required = [
+      nombre_completo, usuario, contrasena, ciudad, telefono, cedula, direccion,
+      tipo_equipo, modelo, descripcion_equipo, proceso, valor_total, pago_tipo
+    ];
+    if (required.some(v => v === undefined || v === null || v === "")) {
+      return res.status(400).json({ ok: false, error: 'Faltan campos obligatorios' });
+    }
+
+    valor_total = Number(valor_total);
+    if (Number.isNaN(valor_total) || valor_total < 0) {
+      return res.status(400).json({ ok: false, error: 'valor_total inválido' });
+    }
+
+    if (pago_tipo === 'abono') {
+      monto_abono = Number(monto_abono ?? 0);
+      if (Number.isNaN(monto_abono) || monto_abono < 0) {
+        return res.status(400).json({ ok: false, error: 'monto_abono inválido' });
+      }
+    } else {
+      // 'pagado' → el trigger lo igualará a valor_total
+      monto_abono = null;
+    }
+
+    const { rows } = await pool.query(
+      `INSERT INTO servicios
+   (nombre_completo, usuario, contrasena, ciudad, telefono, cedula, direccion,
+    tipo_equipo, modelo, descripcion_equipo, proceso,
+    valor_total, pago_tipo, monto_abono)
+   VALUES ($1,$2,$3,$4,$5,$6,$7,
+           $8,$9,$10,$11,
+           $12,$13,$14)
+   RETURNING id, codigo,
+             nombre_completo, usuario, ciudad, telefono, cedula, direccion, rol,
+             fecha_recepcion, tipo_equipo, modelo, descripcion_equipo, proceso,
+             valor_total, pago_tipo, monto_abono, valor_restante, estado`,
+      [
+        nombre_completo, usuario, contrasena, ciudad, telefono, cedula, direccion,
+        tipo_equipo, modelo, descripcion_equipo, proceso,
+        valor_total, pago_tipo, pago_tipo === 'abono' ? monto_abono : null
+      ]
+    );
+
+
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    if (err.code === '23514') return res.status(400).json({ ok: false, error: 'Datos no cumplen validaciones' });
+    if (err.code === '23505') return res.status(409).json({ ok: false, error: 'Código duplicado' });
+    res.status(500).json({ ok: false, error: 'Error al crear servicio' });
+  }
+});
+
+
+// (Opcional) Actualizar algunos campos (proceso/observaciones/pagos)
+app.patch('/api/servicios/:id', auth, requireRole('administrador', 'empleado'), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ ok: false, error: 'ID inválido' });
+
+    const editable = ['observaciones', 'proceso', 'valor_total', 'pago_tipo', 'monto_abono'];
+    const sets = [];
+    const vals = [];
+    let i = 1;
+    for (const k of editable) {
+      if (k in req.body) { sets.push(`${k} = $${i++}`); vals.push(req.body[k]); }
+    }
+    if (!sets.length) return res.status(400).json({ ok: false, error: 'Nada para actualizar' });
+
+    vals.push(id);
+
+    const { rows } = await pool.query(
+      `UPDATE servicios
+       SET ${sets.join(', ')}
+       WHERE id = $${i}
+       RETURNING id, codigo,
+                 nombre_completo, usuario, ciudad, telefono, cedula, direccion, rol,
+                 fecha_recepcion, tipo_equipo, modelo, descripcion_equipo, proceso,
+                 valor_total, pago_tipo, monto_abono, valor_restante, estado`,
+      vals
+    );
+    if (!rows.length) return res.status(404).json({ ok: false, error: 'Servicio no encontrado' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    if (err.code === '23514') return res.status(400).json({ ok: false, error: 'Datos no cumplen validaciones' });
+    res.status(500).json({ ok: false, error: 'Error al actualizar servicio' });
+  }
+});
+
+//mis servicios clientes
+app.get('/api/servicios/mios', auth, requireRole('cliente'), async (req, res) => {
+  try {
+    const { usuario } = req.user;
+    const { rows } = await pool.query(
+      `SELECT id, codigo, nombre_completo, usuario, fecha_recepcion,
+              tipo_equipo, modelo, descripcion_equipo, proceso,
+              valor_total, pago_tipo, monto_abono, valor_restante, estado
+       FROM servicios
+       WHERE usuario = $1
+       ORDER BY fecha_recepcion DESC
+       LIMIT 100`,
+      [usuario]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ ok: false, error: 'Error al obtener tus servicios' });
+  }
+});
+
 
 
 // Arranque

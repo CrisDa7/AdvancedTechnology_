@@ -8,6 +8,11 @@ import AdminDashboard from "./pages/AdminDashboard.jsx";
 import EmployeeLayout from "./layouts/EmployeeLayout.jsx";
 import EmployeeDashboard from "./pages/EmployeeDashboard.jsx";
 import SalesPage from "./SalesPage.jsx";
+import ServicesPage from "./ServicesPage.jsx";
+import ClientLayout from "./layouts/ClientLayout.jsx";
+import ClientDashboard from "./pages/ClientDashboard.jsx";
+import ClientServicesPage from "./pages/ClientServicesPage.jsx";
+
 
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
@@ -64,17 +69,28 @@ export default function App() {
             <Route path="usuarios" element={<UsersPage token={token} />} />{/* admin usuarios */}
             <Route path="productos" element={<ProductsPage token={token} />} /> {/* admin productos */}
             <Route path="ventas" element={<SalesPage token={token} />} /> {/* admin ventas */}
+            <Route path="servicios" element={<ServicesPage token={token} />} /> {/* admin servicios */}
           </Route>
           <Route path="*" element={<Navigate to="/admin" replace />} />
         </Routes>
-      ) : (
+      ) : user.rol === "empleado" ? (
         <Routes>
           <Route path="/empleado" element={<EmployeeLayout user={user} onLogout={logout} />}>
             <Route index element={<EmployeeDashboard token={token} user={user} />} />{/* empleado dashboard */}
             <Route path="productos" element={<ProductsPage token={token} />} /> {/* empleado productos */}
             <Route path="ventas" element={<SalesPage token={token} />} /> {/* empleado ventas */}
+            <Route path="servicios" element={<ServicesPage token={token} />} /> {/* empleado servicios */}
           </Route>
           <Route path="*" element={<Navigate to="/empleado" replace />} />
+        </Routes>
+      ) : (
+        // ====== CLIENTE ======
+        <Routes>
+          <Route path="/cliente" element={<ClientLayout user={user} onLogout={logout} />}>
+            <Route index element={<ClientDashboard token={token} user={user} />} />
+            <Route path="servicios" element={<ClientServicesPage token={token} user={user} />} />
+          </Route>
+          <Route path="*" element={<Navigate to="/cliente" replace />} />
         </Routes>
       )}
     </BrowserRouter>

@@ -28,6 +28,8 @@ export default function AdminLayout({ user, onLogout }) {
           <NavItem to="/admin/usuarios">Usuarios</NavItem>
           <NavItem to="/admin/productos">Productos</NavItem>
           <NavItem to="/admin/ventas">Ventas</NavItem>
+          <NavItem to="/admin/servicios">Servicios</NavItem>
+
 
         </nav>
       </aside>
