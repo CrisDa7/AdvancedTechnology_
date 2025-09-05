@@ -6,7 +6,7 @@ export default function ClientLayout({ user, onLogout }) {
       {/* Sidebar */}
       <aside style={{ background: "#1d4ed8", color: "white", padding: 16 }}>
         <div style={{ fontWeight: 800, fontSize: 20, marginBottom: 4 }}>Advanced Technology</div>
-        <div style={{ opacity: 0.85, fontSize: 12, marginBottom: 16 }}>Panel de cliente</div>
+        <div style={{ opacity: 0.85, fontSize: 12, marginBottom: 16 }}>Cliente</div>
 
         <nav style={{ display: "grid", gap: 6 }}>
           <NavItem to="/cliente" label="Resumen" />
