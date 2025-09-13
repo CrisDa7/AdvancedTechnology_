@@ -12,6 +12,8 @@ import ServicesPage from "./ServicesPage.jsx";
 import ClientLayout from "./layouts/ClientLayout.jsx";
 import ClientDashboard from "./pages/ClientDashboard.jsx";
 import ClientServicesPage from "./pages/ClientServicesPage.jsx";
+import InventoryPage from "./pages/InventoryPage.jsx";
+import ReportsPage from "./pages/ReportsPage.jsx";
 
 
 
@@ -70,6 +72,8 @@ export default function App() {
             <Route path="productos" element={<ProductsPage token={token} />} /> {/* admin productos */}
             <Route path="ventas" element={<SalesPage token={token} />} /> {/* admin ventas */}
             <Route path="servicios" element={<ServicesPage token={token} />} /> {/* admin servicios */}
+            <Route path="inventario" element={<InventoryPage token={token} />} /> {/* admin inventario */}
+            <Route path="reportes" element={<ReportsPage token={token} />} /> {/* admin reportes */}
           </Route>
           <Route path="*" element={<Navigate to="/admin" replace />} />
         </Routes>
@@ -80,6 +84,8 @@ export default function App() {
             <Route path="productos" element={<ProductsPage token={token} />} /> {/* empleado productos */}
             <Route path="ventas" element={<SalesPage token={token} />} /> {/* empleado ventas */}
             <Route path="servicios" element={<ServicesPage token={token} />} /> {/* empleado servicios */}
+            <Route path="inventario" element={<InventoryPage token={token} />} />
+            <Route path="reportes" element={<ReportsPage token={token} />} /> {/* empleado reportes */}
           </Route>
           <Route path="*" element={<Navigate to="/empleado" replace />} />
         </Routes>

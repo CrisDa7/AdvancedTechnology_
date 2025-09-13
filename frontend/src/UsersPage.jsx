@@ -6,7 +6,13 @@ export default function UsersPage({ token }) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [open, setOpen] = useState(false); // modal
+
+  // --- Ocultos en la UI (cuando eliminas a un INACTIVO) ---
+  const [hiddenIds, setHiddenIds] = useState(() => new Set());
+
+  // Crear
+  const [openCreate, setOpenCreate] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState({
     nombre_completo: "",
     usuario: "",
@@ -16,7 +22,45 @@ export default function UsersPage({ token }) {
     rol: "empleado",
     estado: "activo",
   });
-  const [submitting, setSubmitting] = useState(false);
+
+  // Editar
+  const [openEdit, setOpenEdit] = useState(false);
+  const [editUser, setEditUser] = useState(null);
+  const [editForm, setEditForm] = useState({
+    id: null,
+    nombre_completo: "",
+    usuario: "",
+    contrasena: "", // opcional
+    celular: "",
+    cedula: "",
+    rol: "empleado",
+    estado: "activo",
+  });
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  // Cambiar estado
+  const [openEstado, setOpenEstado] = useState(false);
+  const [estadoUser, setEstadoUser] = useState(null);
+  const [nuevoEstado, setNuevoEstado] = useState("activo");
+  const [savingEstado, setSavingEstado] = useState(false);
+
+  // Historial
+  const [openInfo, setOpenInfo] = useState(false);
+  const [infoUser, setInfoUser] = useState(null);
+
+  // Filtros (formulario)
+  const [fNombre, setFNombre] = useState("");
+  const [fCedula, setFCedula] = useState("");
+  const [fRol, setFRol] = useState("Todos");
+  const [fEstado, setFEstado] = useState("Todos");
+
+  // Filtros aplicados
+  const [q, setQ] = useState({
+    nombre: "",
+    cedula: "",
+    rol: "Todos",
+    estado: "Todos",
+  });
 
   const rules = useMemo(
     () => ({
@@ -30,23 +74,25 @@ export default function UsersPage({ token }) {
     []
   );
 
-  const validate = () => {
+  const validateCreate = () => {
     const errs = {};
-    if (!rules.nombre_completo.test(form.nombre_completo)) {
-      errs.nombre_completo = "Solo letras y espacios";
-    }
-    if (!form.usuario.trim()) {
-      errs.usuario = "Usuario obligatorio";
-    }
-    if (!rules.contrasena.test(form.contrasena)) {
-      errs.contrasena = "Debe tener al menos 1 mayúscula";
-    }
-    if (!rules.celular.test(form.celular)) {
-      errs.celular = "El celular debe tener 10 dígitos";
-    }
-    if (!rules.cedula.test(form.cedula)) {
-      errs.cedula = "La cédula debe tener 10 dígitos";
-    }
+    if (!rules.nombre_completo.test(form.nombre_completo)) errs.nombre_completo = "Solo letras y espacios";
+    if (!form.usuario.trim()) errs.usuario = "Usuario obligatorio";
+    if (!rules.contrasena.test(form.contrasena)) errs.contrasena = "Debe tener al menos 1 mayúscula";
+    if (!rules.celular.test(form.celular)) errs.celular = "El celular debe tener 10 dígitos";
+    if (!rules.cedula.test(form.cedula)) errs.cedula = "La cédula debe tener 10 dígitos";
+    return errs;
+  };
+
+  const validateEdit = () => {
+    const errs = {};
+    if (!rules.nombre_completo.test(editForm.nombre_completo)) errs.nombre_completo = "Solo letras y espacios";
+    if (!editForm.usuario.trim()) errs.usuario = "Usuario obligatorio";
+    if (editForm.contrasena && !rules.contrasena.test(editForm.contrasena)) errs.contrasena = "Contraseña con 1 mayúscula";
+    if (!rules.celular.test(editForm.celular)) errs.celular = "El celular debe tener 10 dígitos";
+    if (!rules.cedula.test(editForm.cedula)) errs.cedula = "La cédula debe tener 10 dígitos";
+    if (!rules.rol.includes(editForm.rol)) errs.rol = "Rol inválido";
+    if (!rules.estado.includes(editForm.estado)) errs.estado = "Estado inválido";
     return errs;
   };
 
@@ -60,275 +106,551 @@ export default function UsersPage({ token }) {
       if (!res.ok) throw new Error("No se pudo obtener usuarios");
       const data = await res.json();
       setUsers(data);
+      setHiddenIds(new Set()); // reset ocultos al refrescar
     } catch (e) {
       setError(e.message || "Error al cargar usuarios");
     } finally {
       setLoading(false);
     }
   };
+  useEffect(() => { if (token) fetchUsers(); }, [token]);
 
-  useEffect(() => {
-    if (token) fetchUsers();
-  }, [token]);
-
-  const handleChange = (e) => {
+  /* ---------- Crear ---------- */
+  const onChangeCreate = (e) => {
     const { name, value } = e.target;
     setForm((f) => ({ ...f, [name]: value }));
   };
-
-  const resetForm = () => setForm({
-    nombre_completo: "",
-    usuario: "",
-    contrasena: "",
-    celular: "",
-    cedula: "",
-    rol: "empleado",
-    estado: "activo",
+  const resetCreate = () => setForm({
+    nombre_completo: "", usuario: "", contrasena: "",
+    celular: "", cedula: "", rol: "empleado", estado: "activo"
   });
-
-  const handleSubmit = async (e) => {
+  const submitCreate = async (e) => {
     e.preventDefault();
-    const errs = validate();
-    if (Object.keys(errs).length) {
-      setError(Object.values(errs)[0]);
-      return;
-    }
+    const errs = validateCreate();
+    if (Object.keys(errs).length) return setError(Object.values(errs)[0]);
+    if (!window.confirm("¿Seguro que deseas crear este usuario?")) return;
     try {
-      setSubmitting(true);
-      setError("");
+      setSubmitting(true); setError("");
       const res = await fetch(`${API}/api/users`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: token ? `Bearer ${token}` : "" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(form),
       });
       const body = await res.json();
-      if (!res.ok) {
-        throw new Error(body?.error || "Error al crear usuario");
-      }
+      if (!res.ok) throw new Error(body?.error || "Error al crear usuario");
       setUsers((u) => [body, ...u]);
-      resetForm();
-      setOpen(false); // cerrar modal
+      resetCreate(); setOpenCreate(false);
     } catch (e) {
       setError(e.message || "Error al crear usuario");
+    } finally { setSubmitting(false); }
+  };
+
+  /* ---------- Editar ---------- */
+  const openEditFor = (u) => {
+    setEditUser(u);
+    setEditForm({
+      id: u.id,
+      nombre_completo: u.nombre_completo,
+      usuario: u.usuario,
+      contrasena: "",           // vacío -> no cambia
+      celular: u.celular,
+      cedula: u.cedula,
+      rol: u.rol,
+      estado: u.estado,
+    });
+    setOpenEdit(true);
+  };
+  const onChangeEdit = (e) => {
+    const { name, value } = e.target;
+    setEditForm((f) => ({ ...f, [name]: value }));
+  };
+  const submitEdit = async (e) => {
+    e.preventDefault();
+    const errs = validateEdit();
+    if (Object.keys(errs).length) return setError(Object.values(errs)[0]);
+    if (!window.confirm("¿Seguro que deseas actualizar la información?")) return;
+
+    try {
+      setSavingEdit(true); setError("");
+      const payload = {
+        nombre_completo: editForm.nombre_completo,
+        usuario: editForm.usuario,
+        celular: editForm.celular,
+        cedula: editForm.cedula,
+        rol: editForm.rol,
+        estado: editForm.estado, // aunque está deshabilitado en UI
+      };
+      if (editForm.contrasena) payload.contrasena = editForm.contrasena;
+
+      const res = await fetch(`${API}/api/users/${editForm.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(payload),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error || "Error al actualizar");
+
+      setUsers((list) => list.map((x) => (x.id === body.id ? body : x)));
+      setOpenEdit(false);
+      setEditUser(null);
+    } catch (e) {
+      setError(e.message || "Error al actualizar usuario");
     } finally {
-      setSubmitting(false);
+      setSavingEdit(false);
     }
   };
 
+  /* ---------- Cambiar estado ---------- */
+  const openEstadoFor = (u) => {
+    setEstadoUser(u);
+    setNuevoEstado(u.estado);
+    setOpenEstado(true);
+  };
+  const submitEstado = async (e) => {
+    e.preventDefault();
+    if (!estadoUser) return;
+    if (!window.confirm(`¿Actualizar estado de ${estadoUser.usuario} a "${nuevoEstado}"?`)) return;
+
+    try {
+      setSavingEstado(true); setError("");
+      const res = await fetch(`${API}/api/users/${estadoUser.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ estado: nuevoEstado }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error || "Error actualizando estado");
+      setUsers((list) => list.map((x) => (x.id === body.id ? body : x)));
+      setHiddenIds(prev => { const n = new Set(prev); n.delete(body.id); return n; });
+      setOpenEstado(false);
+      setEstadoUser(null);
+    } catch (e) {
+      setError(e.message || "Error al actualizar estado");
+    } finally {
+      setSavingEstado(false);
+    }
+  };
+
+  /* ---------- Eliminar ---------- */
+  const deleteUser = async (u) => {
+    if (u.estado === "activo") return;
+
+    if (u.estado === "inactivo") {
+      if (!window.confirm(`Quitar a "${u.usuario}" de la lista (no elimina en BD)?`)) return;
+      setHiddenIds(prev => { const n = new Set(prev); n.add(u.id); return n; });
+      alert("Ocultado de la lista. Usa 'Refrescar' o filtra por Estado=Inactivo para verlo nuevamente.");
+      return;
+    }
+
+    // estado === 'dado de baja' → borrar en BD
+    if (!window.confirm(`Eliminar PERMANENTEMENTE a "${u.usuario}"? Esta acción no se puede deshacer.`)) return;
+    try {
+      const res = await fetch(`${API}/api/users/${u.id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error || "No se pudo eliminar");
+      setUsers((list) => list.filter((x) => x.id !== u.id));
+      setHiddenIds(prev => { const n = new Set(prev); n.delete(u.id); return n; });
+    } catch (e) {
+      setError(e.message || "Error eliminando usuario");
+    }
+  };
+
+  /* ---------- Historial ---------- */
+  const openInfoFor = (u) => { setInfoUser(u); setOpenInfo(true); };
+
+  /* ---------- Filtros ---------- */
+  const aplicarFiltros = () => {
+    setQ({
+      nombre: fNombre.trim(),
+      cedula: fCedula.trim(),
+      rol: fRol,
+      estado: fEstado,
+    });
+  };
+  const limpiarFiltros = () => {
+    setFNombre("");
+    setFCedula("");
+    setFRol("Todos");
+    setFEstado("Todos");
+    setQ({ nombre: "", cedula: "", rol: "Todos", estado: "Todos" });
+  };
+
+  // Filtrado local
+  const filtered = users.filter((u) => {
+    // Si NO hay estado específico, excluimos los ocultos
+    if (q.estado === "Todos" && hiddenIds.has(u.id)) return false;
+
+    if (q.nombre && !u.nombre_completo.toLowerCase().includes(q.nombre.toLowerCase())) return false;
+    if (q.cedula && !String(u.cedula || "").startsWith(q.cedula)) return false;
+    if (q.rol !== "Todos" && u.rol !== q.rol.toLowerCase()) return false;
+    if (q.estado !== "Todos" && u.estado !== q.estado.toLowerCase()) return false;
+
+    return true;
+  });
+
   if (!token) {
     return (
-      <div style={{ maxWidth: 1000, margin: "0 auto", padding: 20 }}>
-        <p>Necesitas iniciar sesión.</p>
+      <div className="w-full px-6 py-6">
+        <p className="rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-yellow-800">
+          Necesitas iniciar sesión.
+        </p>
       </div>
     );
   }
 
   return (
-    <div style={{ maxWidth: 1000, margin: "0 auto", padding: 20, background: "#eef2ff", minHeight: "100vh" }}>
-      <h1 style={{ fontSize: 28, marginBottom: 8, color: "#1e3a8a" }}>Usuarios</h1>
-      <p style={{ color: "#555", marginBottom: 16 }}>
-        API: <code>{API}</code>
-      </p>
+    <div className="min-h-screen bg-sapphire-50">
+      <div className="w-full px-6 py-6 md:px-8 xl:px-10">
+        {/* Título */}
+        <h1 className="mb-4 text-2xl font-bold text-sapphire-900">Usuarios</h1>
 
-      {/* Acciones */}
-      <div style={{ ...card, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h2 style={{ margin: 0, color: "#1e40af" }}>Gestión de usuarios</h2>
-        <button style={buttonBlue} onClick={() => { setError(""); setOpen(true); }}>Agregar usuario</button>
-      </div>
-
-      {/* Tabla */}
-      <div style={{ ...card, marginTop: 16 }}>
-        <h3 style={{ marginTop: 0, color: "#1e40af" }}>Listado</h3>
-        {loading ? (
-          <p>Cargando...</p>
-        ) : users.length === 0 ? (
-          <p>No hay usuarios.</p>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={table}>
-              <thead>
-                <tr style={{ background: "#e5e7eb", color: "black" }}>
-                  <th>ID</th>
-                  <th>Nombre</th>
-                  <th>Usuario</th>
-                  <th>Celular</th>
-                  <th>Cédula</th>
-                  <th>Rol</th>
-                  <th>Estado</th>
-                  <th>Fecha registro</th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map((u) => (
-                  <tr key={u.id} style={{ color: "black" }}>
-                    <td>{u.id}</td>
-                    <td>{u.nombre_completo}</td>
-                    <td>{u.usuario}</td>
-                    <td>{u.celular}</td>
-                    <td>{u.cedula}</td>
-                    <td>{u.rol}</td>
-                    <td>{u.estado}</td>
-                    <td>{new Date(u.fecha_registro).toLocaleString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        {/* Gestión + Acciones (Refrescar SOLO aquí) */}
+        <div className="mb-4 flex items-center justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-glass">
+          <h2 className="m-0 text-lg font-semibold text-sapphire-800">Gestión de usuarios</h2>
+          <div className="flex gap-2">
+            <button
+              onClick={fetchUsers}
+              className="rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-200"
+            >
+              Refrescar
+            </button>
+            <button
+              onClick={() => { setError(""); setOpenCreate(true); }}
+              className="rounded-lg bg-sapphire-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sapphire-700 active:translate-y-px"
+            >
+              Agregar usuario
+            </button>
           </div>
-        )}
-      </div>
+        </div>
 
-      {/* MODAL */}
-      {open && (
-        <div style={backdrop}>
-          <div style={modal} role="dialog" aria-modal>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <h3 style={{ margin: 0 }}>Agregar usuario</h3>
-              <button onClick={() => setOpen(false)} style={buttonGhost}>✕</button>
+        {/* Filtros (SIN botón Refrescar aquí) */}
+        <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-glass">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <Field label="Nombre">
+              <input
+                value={fNombre}
+                onChange={(e) => setFNombre(e.target.value)}
+                placeholder="Ej: Ana Pérez"
+                className={inputCls}
+              />
+            </Field>
+            <Field label="Cédula">
+              <input
+                value={fCedula}
+                onChange={(e) => setFCedula(e.target.value)}
+                placeholder="Empieza por…"
+                className={inputCls}
+              />
+            </Field>
+            <Field label="Rol">
+              <select value={fRol} onChange={(e) => setFRol(e.target.value)} className={inputCls}>
+                <option>Todos</option>
+                <option>Administrador</option>
+                <option>Empleado</option>
+              </select>
+            </Field>
+            <Field label="Estado">
+              <select value={fEstado} onChange={(e) => setFEstado(e.target.value)} className={inputCls}>
+                <option>Todos</option>
+                <option>Activo</option>
+                <option>Inactivo</option>
+                <option>Dado de baja</option>
+              </select>
+            </Field>
+          </div>
+
+          <div className="mt-3 flex gap-2">
+            <button
+              onClick={aplicarFiltros}
+              className="rounded-lg bg-sapphire-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sapphire-700"
+            >
+              Aplicar filtros
+            </button>
+            <button
+              onClick={limpiarFiltros}
+              className="rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-200"
+            >
+              Limpiar
+            </button>
+          </div>
+        </div>
+
+        {/* Listado */}
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-glass">
+          <h3 className="mb-3 text-base font-semibold text-sapphire-900">Listado</h3>
+
+          {error && (
+            <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+              {error}
             </div>
+          )}
 
-            {error && <div style={alert}>{error}</div>}
+          {loading ? (
+            <p className="text-slate-600">Cargando...</p>
+          ) : filtered.length === 0 ? (
+            <p className="text-slate-600">Sin resultados.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full border-collapse text-left text-sm text-slate-900">
+                <thead>
+                  <tr className="bg-slate-100 text-slate-700">
+                    <Th>Nombre</Th>
+                    <Th>Celular</Th>
+                    <Th>Rol</Th>
+                    <Th>Estado</Th>
+                    <Th>Acciones</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((u) => (
+                    <tr key={u.id} className="border-b border-slate-100 hover:bg-slate-50">
+                      <Td>{u.nombre_completo}</Td>
+                      <Td>{u.celular}</Td>
+                      <Td>
+                        <span className="rounded-full bg-sapphire-100 px-2 py-0.5 text-xs font-semibold text-sapphire-800">
+                          {u.rol}
+                        </span>
+                      </Td>
+                      <Td>
+                        <span
+                          className={[
+                            "rounded-full px-2 py-0.5 text-xs font-semibold",
+                            u.estado === "activo"
+                              ? "bg-green-100 text-green-800"
+                              : u.estado === "inactivo"
+                              ? "bg-amber-100 text-amber-800"
+                              : "bg-slate-300 text-slate-800",
+                          ].join(" ")}
+                        >
+                          {u.estado}
+                        </span>
+                      </Td>
+                      <Td>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            className="rounded-md border border-slate-300 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-800 hover:bg-slate-200"
+                            onClick={() => openEditFor(u)}
+                          >
+                            Editar
+                          </button>
+                          <button
+                            className="rounded-md border border-blue-300 bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-800 hover:bg-blue-200"
+                            onClick={() => openEstadoFor(u)}
+                          >
+                            Estado
+                          </button>
+                          <button
+                            className="rounded-md border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                            onClick={() => openInfoFor(u)}
+                          >
+                            Historial
+                          </button>
+                          <button
+                            disabled={u.estado === "activo"}
+                            className={`rounded-md px-3 py-1 text-xs font-semibold ${
+                              u.estado === "dado de baja"
+                                ? "border border-red-300 bg-red-100 text-red-800 hover:bg-red-200"
+                                : u.estado === "inactivo"
+                                ? "border border-amber-300 bg-amber-100 text-amber-800 hover:bg-amber-200"
+                                : "border border-slate-300 bg-slate-100 text-slate-400"
+                            }`}
+                            onClick={() => deleteUser(u)}
+                            title={
+                              u.estado === "activo"
+                                ? "Primero cambia el estado a 'inactivo' o 'dado de baja'"
+                                : u.estado === "inactivo"
+                                ? "Quitar de la lista (no elimina en BD)"
+                                : "Eliminar permanentemente"
+                            }
+                          >
+                            Eliminar
+                          </button>
+                        </div>
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
 
-            <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12 }}>
-              <div style={grid2}>
-                <Field label="Nombre completo" htmlFor="nombre_completo">
-                  <input id="nombre_completo" name="nombre_completo" value={form.nombre_completo} onChange={handleChange} style={input} />
+        {/* MODAL: Crear */}
+        {openCreate && (
+          <Modal onClose={() => setOpenCreate(false)} title="Agregar usuario">
+            <FormError error={error} />
+            <form onSubmit={submitCreate} className="grid gap-3">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <Field label="Nombre completo">
+                  <input name="nombre_completo" value={form.nombre_completo} onChange={onChangeCreate} className={inputCls} />
                 </Field>
-                <Field label="Usuario" htmlFor="usuario">
-                  <input id="usuario" name="usuario" value={form.usuario} onChange={handleChange} style={input} />
+                <Field label="Usuario">
+                  <input name="usuario" value={form.usuario} onChange={onChangeCreate} className={inputCls} />
                 </Field>
               </div>
-
-              <div style={grid2}>
-                <Field label="Contraseña" htmlFor="contrasena">
-                  <input id="contrasena" name="contrasena" type="password" value={form.contrasena} onChange={handleChange} style={input} />
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <Field label="Contraseña (1 mayúscula)">
+                  <input type="password" name="contrasena" value={form.contrasena} onChange={onChangeCreate} className={inputCls} />
                 </Field>
-                <Field label="Celular (10 dígitos)" htmlFor="celular">
-                  <input id="celular" name="celular" value={form.celular} onChange={handleChange} style={input} />
+                <Field label="Celular (10 dígitos)">
+                  <input name="celular" value={form.celular} onChange={onChangeCreate} className={inputCls} />
                 </Field>
               </div>
-
-              <div style={grid2}>
-                <Field label="Cédula (10 dígitos)" htmlFor="cedula">
-                  <input id="cedula" name="cedula" value={form.cedula} onChange={handleChange} style={input} />
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <Field label="Cédula (10 dígitos)">
+                  <input name="cedula" value={form.cedula} onChange={onChangeCreate} className={inputCls} />
                 </Field>
-                <Field label="Rol" htmlFor="rol">
-                  <select id="rol" name="rol" value={form.rol} onChange={handleChange} style={input}>
+                <Field label="Rol">
+                  <select name="rol" value={form.rol} onChange={onChangeCreate} className={inputCls}>
                     <option value="empleado">Empleado</option>
                     <option value="administrador">Administrador</option>
                   </select>
                 </Field>
               </div>
+              <div className="flex items-center justify-end gap-2">
+                <button type="button" onClick={() => { setOpenCreate(false); resetCreate(); setError(""); }} className="rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-200">Cancelar</button>
+                <button type="submit" disabled={submitting} className="rounded-lg bg-sapphire-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sapphire-700 disabled:opacity-70">
+                  {submitting ? "Guardando..." : "Guardar"}
+                </button>
+              </div>
+            </form>
+          </Modal>
+        )}
 
-              <Field label="Estado" htmlFor="estado">
-                <select id="estado" name="estado" value={form.estado} onChange={handleChange} style={input}>
+        {/* MODAL: Editar (Estado deshabilitado) */}
+        {openEdit && editUser && (
+          <Modal onClose={() => setOpenEdit(false)} title={`Editar: ${editUser.usuario}`}>
+            <FormError error={error} />
+            <form onSubmit={submitEdit} className="grid gap-3">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <Field label="Nombre completo">
+                  <input name="nombre_completo" value={editForm.nombre_completo} onChange={onChangeEdit} className={inputCls} />
+                </Field>
+                <Field label="Usuario">
+                  <input name="usuario" value={editForm.usuario} onChange={onChangeEdit} className={inputCls} />
+                </Field>
+              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <Field label="Nueva contraseña (opcional, 1 mayúscula)">
+                  <input type="password" name="contrasena" value={editForm.contrasena} onChange={onChangeEdit} className={inputCls} />
+                </Field>
+                <Field label="Celular (10 dígitos)">
+                  <input name="celular" value={editForm.celular} onChange={onChangeEdit} className={inputCls} />
+                </Field>
+              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <Field label="Cédula (10 dígitos)">
+                  <input name="cedula" value={editForm.cedula} onChange={onChangeEdit} className={inputCls} />
+                </Field>
+                <Field label="Rol">
+                  <select name="rol" value={editForm.rol} onChange={onChangeEdit} className={inputCls}>
+                    <option value="empleado">Empleado</option>
+                    <option value="administrador">Administrador</option>
+                  </select>
+                </Field>
+              </div>
+              <Field label="Estado (se cambia desde el botón Estado)">
+                <select name="estado" value={editForm.estado} onChange={onChangeEdit} className={inputCls} disabled>
                   <option value="activo">Activo</option>
                   <option value="inactivo">Inactivo</option>
                   <option value="dado de baja">Dado de baja</option>
                 </select>
               </Field>
-
-              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                <button type="button" onClick={() => { setOpen(false); resetForm(); setError(""); }} style={buttonGray}>
-                  Cancelar
-                </button>
-                <button type="submit" disabled={submitting} style={buttonBlue}>
-                  {submitting ? "Guardando..." : "Guardar"}
+              <div className="flex items-center justify-end gap-2">
+                <button type="button" onClick={() => { setOpenEdit(false); setEditUser(null); setError(""); }} className="rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-200">Cancelar</button>
+                <button type="submit" disabled={savingEdit} className="rounded-lg bg-sapphire-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sapphire-700 disabled:opacity-70">
+                  {savingEdit ? "Guardando..." : "Guardar cambios"}
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
+          </Modal>
+        )}
+
+        {/* MODAL: Cambiar estado */}
+        {openEstado && estadoUser && (
+          <Modal onClose={() => setOpenEstado(false)} title={`Estado de: ${estadoUser.usuario}`}>
+            <form onSubmit={submitEstado} className="grid gap-3">
+              <Field label="Selecciona un estado">
+                <select value={nuevoEstado} onChange={(e) => setNuevoEstado(e.target.value)} className={inputCls}>
+                  <option value="activo">Activo</option>
+                  <option value="inactivo">Inactivo</option>
+                  <option value="dado de baja">Dado de baja</option>
+                </select>
+              </Field>
+              <div className="text-sm text-slate-600">
+                Nota: si el usuario está <b>inactivo</b> no podrá iniciar sesión.  
+                Si está <b>dado de baja</b>, podrás eliminarlo definitivamente.
+              </div>
+              <div className="flex items-center justify-end gap-2">
+                <button type="button" onClick={() => setOpenEstado(false)} className="rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-200">Cancelar</button>
+                <button type="submit" disabled={savingEstado} className="rounded-lg bg-sapphire-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sapphire-700 disabled:opacity-70">
+                  {savingEstado ? "Actualizando..." : "Actualizar estado"}
+                </button>
+              </div>
+            </form>
+          </Modal>
+        )}
+
+        {/* MODAL: Historial */}
+        {openInfo && infoUser && (
+          <Modal onClose={() => setOpenInfo(false)} title={`Detalle de usuario: ${infoUser.usuario}`}>
+            <div className="grid grid-cols-1 gap-2 text-sm md:grid-cols-2">
+              <Info label="Nombre completo" value={infoUser.nombre_completo} />
+              <Info label="Usuario" value={infoUser.usuario} />
+              <Info label="Rol" value={infoUser.rol} />
+              <Info label="Estado" value={infoUser.estado} />
+              <Info label="Celular" value={infoUser.celular} />
+              <Info label="Cédula" value={infoUser.cedula} />
+              <Info label="Fecha registro" value={new Date(infoUser.fecha_registro).toLocaleString()} />
+            </div>
+          </Modal>
+        )}
+      </div>
     </div>
   );
 }
 
-function Field({ label, htmlFor, children }) {
+/* ---------- Helpers UI ---------- */
+function Modal({ title, onClose, children }) {
   return (
-    <label htmlFor={htmlFor} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 14, color: "#1f2937" }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
+      <div className="w-full max-w-3xl rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl">
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-slate-900">{title}</h3>
+          <button onClick={onClose} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 hover:bg-slate-50">✕</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+function Field({ label, children }) {
+  return (
+    <label className="flex flex-col gap-1 text-sm text-slate-700">
       <span>{label}</span>
       {children}
     </label>
   );
 }
-
-const card = {
-  background: "white",
-  border: "1px solid #dbeafe",
-  borderRadius: 12,
-  padding: 16,
-  boxShadow: "0 2px 4px rgba(0,0,0,0.05)",
-};
-
-const alert = {
-  background: "#fee2e2",
-  color: "#991b1b",
-  border: "1px solid #fecaca",
-  padding: 10,
-  borderRadius: 8,
-  marginBottom: 8,
-};
-
-const grid2 = {
-  display: "grid",
-  gridTemplateColumns: "1fr 1fr",
-  gap: 12,
-};
-
-const input = {
-  padding: 10,
-  borderRadius: 8,
-  border: "1px solid #cbd5e1",
-  outline: "none",
-};
-
-const buttonBlue = {
-  padding: "10px 14px",
-  borderRadius: 8,
-  border: "none",
-  background: "#1d4ed8",
-  color: "white",
-  cursor: "pointer",
-};
-
-const buttonGray = {
-  padding: "10px 14px",
-  borderRadius: 8,
-  border: "1px solid #d1d5db",
-  background: "#f3f4f6",
-  color: "#111827",
-  cursor: "pointer",
-};
-
-const buttonGhost = {
-  padding: "6px 10px",
-  borderRadius: 8,
-  border: "1px solid #e5e7eb",
-  background: "white",
-  color: "#111827",
-  cursor: "pointer",
-};
-
-const table = {
-  width: "100%",
-  borderCollapse: "collapse",
-};
-
-const backdrop = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(0,0,0,0.5)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: 16,
-};
-
-const modal = {
-  background: "white",
-  borderRadius: 12,
-  border: "1px solid #e5e7eb",
-  width: "min(720px, 100%)",
-  padding: 16,
-  boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
-};
+function Info({ label, value }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className="font-medium text-slate-900">{value || "—"}</div>
+    </div>
+  );
+}
+function FormError({ error }) {
+  if (!error) return null;
+  return (
+    <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+      {error}
+    </div>
+  );
+}
+function Th({ children }) { return <th className="px-3 py-2">{children}</th>; }
+function Td({ children }) { return <td className="px-3 py-2">{children}</td>; }
+const inputCls = "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 outline-none focus:border-sapphire-400 focus:ring-2 focus:ring-sapphire-400/40";

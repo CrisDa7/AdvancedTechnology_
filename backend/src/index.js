@@ -1,3 +1,4 @@
+// src/index.js
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -7,7 +8,9 @@ const { pool } = require('./db');
 
 const app = express();
 
-// CORS: solo tu frontend
+/* =========================================================
+   Configuración básica
+   ========================================================= */
 app.use(cors({
   origin: 'http://localhost:5173',
   methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
@@ -15,14 +18,16 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// Helpers
+/* =========================================================
+   Utilidades y helpers
+   ========================================================= */
 const isHash = (s) => typeof s === 'string' && s.startsWith('$2');
+
 const signToken = (payload) =>
   jwt.sign(payload, process.env.JWT_SECRET || 'dev_secret', {
     expiresIn: process.env.JWT_EXPIRES_IN || '1d',
   });
 
-// Middlewares
 function auth(req, res, next) {
   const h = req.headers.authorization || '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : null;
@@ -42,6 +47,7 @@ function requireAdmin(req, res, next) {
   }
   next();
 }
+
 function requireRole(...roles) {
   return (req, res, next) => {
     if (!req.user?.rol || !roles.includes(req.user.rol)) {
@@ -51,12 +57,34 @@ function requireRole(...roles) {
   };
 }
 
-// Health
+/* ---- Helpers compartidos para servicios (evitar duplicados) ---- */
+async function canAccessService(req, servicioId) {
+  const { rows } = await pool.query('SELECT id, usuario FROM servicios WHERE id=$1', [servicioId]);
+  const s = rows[0];
+  if (!s) return { ok:false, code:404, error:'Servicio no existe' };
+
+  if (req.user?.rol === 'administrador' || req.user?.rol === 'empleado') return { ok:true, srv:s };
+  if (req.user?.rol === 'cliente' && req.user?.usuario === s.usuario) return { ok:true, srv:s };
+
+  return { ok:false, code:403, error:'No autorizado' };
+}
+
+async function getUsuarioFromToken(req) {
+  if (req.user?.usuario) return req.user.usuario;
+  if (req.user?.rol === 'administrador' || req.user?.rol === 'empleado') {
+    const { rows } = await pool.query('SELECT usuario FROM users WHERE id=$1', [req.user.id]);
+    return rows[0]?.usuario || 'sistema';
+  }
+  return 'sistema';
+}
+
+/* =========================================================
+   Health & utilidades
+   ========================================================= */
 app.get('/health', (req, res) => {
   res.json({ ok: true, service: 'backend', time: new Date().toISOString() });
 });
 
-// DB time
 app.get('/db-time', async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT NOW() AS db_time;');
@@ -67,6 +95,9 @@ app.get('/db-time', async (req, res) => {
   }
 });
 
+/* =========================================================
+   Autenticación
+   ========================================================= */
 // LOGIN (users -> servicios)
 app.post('/api/login', async (req, res) => {
   try {
@@ -75,7 +106,7 @@ app.post('/api/login', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Usuario y contraseña son obligatorios' });
     }
 
-    // 1) Intentar en USERS (admin/empleado/cliente)
+    // 1) Intentar en USERS (admin/empleado)
     const { rows: urows } = await pool.query(
       'SELECT id, nombre_completo, usuario, contrasena, rol, estado, fecha_registro FROM users WHERE usuario = $1 LIMIT 1',
       [usuario]
@@ -84,7 +115,8 @@ app.post('/api/login', async (req, res) => {
 
     if (u) {
       let ok = false;
-      if (typeof u.contrasena === 'string' && u.contrasena.startsWith('$2')) {
+
+      if (isHash(u.contrasena)) {
         ok = await bcrypt.compare(contrasena, u.contrasena);
       } else {
         ok = contrasena === u.contrasena;
@@ -94,6 +126,11 @@ app.post('/api/login', async (req, res) => {
         }
       }
       if (!ok) return res.status(401).json({ ok: false, error: 'Credenciales inválidas' });
+
+      // 👉 Bloquear acceso si no está activo
+      if (u.estado !== 'activo') {
+        return res.status(403).json({ ok:false, error:'Cuenta inactiva o dada de baja' });
+      }
 
       const token = signToken({ id: u.id, usuario: u.usuario, nombre: u.nombre_completo, rol: u.rol });
       return res.json({
@@ -111,7 +148,6 @@ app.post('/api/login', async (req, res) => {
     }
 
     // 2) Si no está en users, intentar como CLIENTE en SERVICIOS (texto plano)
-    //    Buscamos una fila que coincida usuario + contraseña y tomamos la más reciente
     const { rows: srows } = await pool.query(
       `SELECT id, nombre_completo, usuario, contrasena, fecha_recepcion
        FROM servicios
@@ -133,8 +169,8 @@ app.post('/api/login', async (req, res) => {
         nombre_completo: s.nombre_completo,
         usuario: s.usuario,
         rol: 'cliente',
-        estado: 'activo',                // no hay estado de cuenta en servicios; asumimos activo
-        fecha_registro: s.fecha_recepcion, // usamos fecha del último servicio
+        estado: 'activo',                // servicios no maneja estado → asumimos activo
+        fecha_registro: s.fecha_recepcion,
       },
     });
   } catch (err) {
@@ -142,7 +178,6 @@ app.post('/api/login', async (req, res) => {
     res.status(500).json({ ok: false, error: 'Error en login' });
   }
 });
-
 
 // Perfil (admin/empleado desde users, cliente desde servicios)
 app.get('/api/profile', auth, async (req, res) => {
@@ -171,7 +206,6 @@ app.get('/api/profile', auth, async (req, res) => {
       });
     }
 
-    // Ramas admin/empleado: siguen igual
     const { rows } = await pool.query(
       'SELECT id, nombre_completo, usuario, rol, estado, fecha_registro FROM users WHERE id = $1',
       [req.user.id]
@@ -185,8 +219,10 @@ app.get('/api/profile', auth, async (req, res) => {
   }
 });
 
-
-// Listar usuarios — solo admin
+/* =========================================================
+   Usuarios (Admin)
+   ========================================================= */
+// Listar usuarios
 app.get('/api/users', auth, requireAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query(`
@@ -201,14 +237,13 @@ app.get('/api/users', auth, requireAdmin, async (req, res) => {
   }
 });
 
-// Crear usuario — solo admin (y se hashea antes de guardar)
+// Crear usuario (hashea contraseña)
 app.post('/api/users', auth, requireAdmin, async (req, res) => {
   try {
     const { nombre_completo, usuario, contrasena, celular, cedula, rol, estado } = req.body;
     if (!nombre_completo || !usuario || !contrasena || !celular || !cedula || !rol || !estado) {
       return res.status(400).json({ ok: false, error: 'Faltan campos obligatorios' });
     }
-    // Valida políticas antes de hashear
     if (!/[A-Z]/.test(contrasena)) {
       return res.status(400).json({ ok: false, error: 'La contraseña debe tener al menos 1 mayúscula' });
     }
@@ -229,12 +264,84 @@ app.post('/api/users', auth, requireAdmin, async (req, res) => {
       return res.status(409).json({ ok: false, error: 'Dato duplicado (usuario/cédula/celular ya existe)' });
     }
     if (err.code === '23514') {
-      return res.status(400).json({ ok: false, error: 'Datos no cumplen las reglas (revisa formato/valores)' });
+      return res.status(400).json({ ok: false, error: 'Datos no cumplen las reglas' });
     }
     res.status(500).json({ ok: false, error: 'Error al crear usuario' });
   }
 });
-// Stats de administrador
+
+// Actualizar usuario (password opcional)
+app.patch('/api/users/:id', auth, requireAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ ok:false, error:'ID inválido' });
+    }
+
+    const { nombre_completo, usuario, contrasena, celular, cedula, rol, estado } = req.body;
+
+    const sets = [];
+    const vals = [];
+    let i = 1;
+
+    if (nombre_completo != null) { sets.push(`nombre_completo=$${i++}`); vals.push(nombre_completo); }
+    if (usuario != null)        { sets.push(`usuario=$${i++}`);         vals.push(usuario); }
+    if (celular != null)        { sets.push(`celular=$${i++}`);         vals.push(celular); }
+    if (cedula != null)         { sets.push(`cedula=$${i++}`);          vals.push(cedula); }
+    if (rol != null)            { sets.push(`rol=$${i++}`);             vals.push(rol); }
+    if (estado != null)         { sets.push(`estado=$${i++}`);          vals.push(estado); }
+
+    if (contrasena != null && contrasena !== "") {
+      if (!/[A-Z]/.test(contrasena)) {
+        return res.status(400).json({ ok:false, error:'La contraseña debe tener al menos 1 mayúscula' });
+      }
+      const hash = await bcrypt.hash(contrasena, 10);
+      sets.push(`contrasena=$${i++}`); vals.push(hash);
+    }
+
+    if (!sets.length) return res.status(400).json({ ok:false, error:'Nada para actualizar' });
+
+    vals.push(id);
+
+    const { rows } = await pool.query(
+      `UPDATE users SET ${sets.join(', ')} WHERE id=$${i}
+       RETURNING id, nombre_completo, usuario, celular, cedula, rol, estado, fecha_registro`,
+      vals
+    );
+    if (!rows.length) return res.status(404).json({ ok:false, error:'Usuario no encontrado' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    if (err.code === '23505') return res.status(409).json({ ok:false, error:'Dato duplicado (usuario/cédula/celular)' });
+    if (err.code === '23514') return res.status(400).json({ ok:false, error:'Datos no cumplen reglas' });
+    res.status(500).json({ ok:false, error:'Error al actualizar usuario' });
+  }
+});
+
+// Eliminar usuario (solo si estado='dado de baja')
+app.delete('/api/users/:id', auth, requireAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ ok:false, error:'ID inválido' });
+
+    const { rows: chk } = await pool.query('SELECT id, estado FROM users WHERE id=$1', [id]);
+    const u = chk[0];
+    if (!u) return res.status(404).json({ ok:false, error:'Usuario no encontrado' });
+    if (u.estado !== 'dado de baja') {
+      return res.status(400).json({ ok:false, error:'Solo puedes eliminar usuarios dados de baja' });
+    }
+
+    await pool.query('DELETE FROM users WHERE id=$1', [id]);
+    res.json({ ok:true, id });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ ok:false, error:'Error al eliminar usuario' });
+  }
+});
+
+/* =========================================================
+   Estadísticas Admin
+   ========================================================= */
 app.get('/api/admin/stats', auth, requireAdmin, async (req, res) => {
   try {
     const sumQuery = `
@@ -265,18 +372,43 @@ app.get('/api/admin/stats', auth, requireAdmin, async (req, res) => {
     res.status(500).json({ ok: false, error: 'Error obteniendo estadísticas' });
   }
 });
-// ===================== PRODUCTOS =====================
 
-// Listar productos — admin o empleado
+/* =========================================================
+   Productos
+   ========================================================= */
+
+// Listar productos — ahora con filtros por querystring (?codigo=...&nombre=...)
 app.get('/api/productos', auth, requireRole('administrador', 'empleado'), async (req, res) => {
   try {
-    const { rows } = await pool.query(`
+    // Filtros opcionales
+    const codigo = (req.query.codigo || '').trim(); // empieza por...
+    const nombre = (req.query.nombre || '').trim(); // contiene...
+
+    const conds = [];
+    const vals = [];
+
+    if (codigo) {
+      vals.push(codigo);
+      conds.push(`codigo ILIKE $${vals.length} || '%'`);
+    }
+    if (nombre) {
+      vals.push(nombre);
+      conds.push(`nombre ILIKE '%' || $${vals.length} || '%'`);
+    }
+
+    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+
+    const sql = `
       SELECT id, codigo, nombre, categoria, marca,
-             precio_compra, precio_venta, stock_inicial,
+             precio_compra, precio_venta, stock_inicial, stock_actual,
              descripcion, fecha_registro
       FROM productos
+      ${where}
       ORDER BY id ASC
-    `);
+      LIMIT 500;
+    `;
+
+    const { rows } = await pool.query(sql, vals);
     res.json(rows);
   } catch (err) {
     console.error(err);
@@ -297,7 +429,7 @@ app.post('/api/productos', auth, requireRole('administrador', 'empleado'), async
     }
 
     precio_compra = Number(precio_compra);
-    precio_venta = Number(precio_venta);
+    precio_venta  = Number(precio_venta);
     stock_inicial = Number(stock_inicial);
 
     if (Number.isNaN(precio_compra) || precio_compra < 0) {
@@ -335,7 +467,8 @@ app.post('/api/productos', auth, requireRole('administrador', 'empleado'), async
     res.status(500).json({ ok: false, error: 'Error al crear producto' });
   }
 });
-// Buscar productos por código o nombre (admin y empleado)
+
+// Buscador rápido (autocomplete)
 app.get('/api/productos/search', auth, requireRole('administrador', 'empleado'), async (req, res) => {
   try {
     const q = (req.query.q || '').trim();
@@ -354,7 +487,10 @@ app.get('/api/productos/search', auth, requireRole('administrador', 'empleado'),
     res.status(500).json({ ok: false, error: 'Error buscando productos' });
   }
 });
-// Crear venta (admin y empleado)
+/* =========================================================
+   Ventas (línea) + Comprobantes + Órdenes
+   ========================================================= */
+// Venta simple
 app.post('/api/ventas', auth, requireRole('administrador', 'empleado'), async (req, res) => {
   try {
     let { cliente_nombre, cedula, telefono, producto_id, cantidad, precio_unitario, descripcion } = req.body;
@@ -363,9 +499,8 @@ app.post('/api/ventas', auth, requireRole('administrador', 'empleado'), async (r
       return res.status(400).json({ ok: false, error: 'Faltan campos obligatorios' });
     }
 
-    // Coerciones
     producto_id = Number(producto_id);
-    cantidad = Number(cantidad);
+    cantidad    = Number(cantidad);
     if (!Number.isInteger(producto_id) || producto_id <= 0) {
       return res.status(400).json({ ok: false, error: 'producto_id inválido' });
     }
@@ -373,7 +508,6 @@ app.post('/api/ventas', auth, requireRole('administrador', 'empleado'), async (r
       return res.status(400).json({ ok: false, error: 'cantidad inválida' });
     }
 
-    // precio_unitario es opcional; si no viene, el trigger tomará el precio_venta del producto
     if (precio_unitario != null) {
       precio_unitario = Number(precio_unitario);
       if (Number.isNaN(precio_unitario) || precio_unitario < 0) {
@@ -393,14 +527,14 @@ app.post('/api/ventas', auth, requireRole('administrador', 'empleado'), async (r
     res.status(201).json(rows[0]);
   } catch (err) {
     console.error(err);
-    // Si los triggers de stock fallan por falta de stock, se lanza excepción:
     if (String(err.message || '').toLowerCase().includes('stock insuficiente')) {
       return res.status(400).json({ ok: false, error: 'Stock insuficiente' });
     }
     res.status(500).json({ ok: false, error: 'Error al crear venta' });
   }
 });
-// Listar ventas recientes (admin y empleado)
+
+// Ventas recientes
 app.get('/api/ventas', auth, requireRole('administrador', 'empleado'), async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -416,9 +550,246 @@ app.get('/api/ventas', auth, requireRole('administrador', 'empleado'), async (re
     res.status(500).json({ ok: false, error: 'Error al obtener ventas' });
   }
 });
-// ===================== SERVICIOS =====================
 
-// Listar servicios (últimos 100)
+// Ventas en lote → comprobante
+app.post('/api/ventas/lote', auth, requireRole('administrador', 'empleado'), async (req, res) => {
+  const client = await pool.connect();
+  try {
+    let { cliente_nombre, cedula, telefono, descripcion, items } = req.body;
+
+    if (!cliente_nombre || !cedula || !telefono || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ ok: false, error: 'Faltan datos o items vacío' });
+    }
+
+    items = items.map(it => ({
+      producto_id: Number(it.producto_id),
+      cantidad: Number(it.cantidad),
+      precio_unitario: it.precio_unitario != null && it.precio_unitario !== ''
+        ? Number(it.precio_unitario)
+        : null
+    })).filter(it =>
+      Number.isInteger(it.producto_id) && it.producto_id > 0 &&
+      Number.isInteger(it.cantidad) && it.cantidad >= 1
+    );
+
+    if (!items.length) {
+      return res.status(400).json({ ok: false, error: 'Items inválidos' });
+    }
+
+    // Consolidar productos repetidos
+    const merged = new Map();
+    for (const it of items) {
+      const k = it.producto_id;
+      if (!merged.has(k)) merged.set(k, { ...it });
+      else merged.get(k).cantidad += it.cantidad;
+    }
+    items = Array.from(merged.values());
+
+    await client.query('BEGIN');
+
+    const { rows: [comp] } = await client.query(
+      `INSERT INTO venta_comprobantes (cliente_nombre, cedula, telefono, descripcion, usuario)
+       VALUES ($1,$2,$3,$4,$5)
+       RETURNING *`,
+      [cliente_nombre, cedula, telefono, descripcion || null, req.user?.nombre || req.user?.usuario || null]
+    );
+
+    const creadas = [];
+    let total = 0;
+
+    for (const it of items) {
+      const { rows: [v] } = await client.query(
+        `INSERT INTO ventas
+          (cliente_nombre, cedula, telefono, producto_id, precio_unitario, cantidad, descripcion, comprobante_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         RETURNING id, cliente_nombre, cedula, telefono, producto_id,
+                   producto_nombre, precio_unitario, cantidad, total, descripcion, fecha_venta, comprobante_id`,
+        [
+          cliente_nombre,
+          cedula,
+          telefono,
+          it.producto_id,
+          it.precio_unitario,
+          it.cantidad,
+          descripcion || null,
+          comp.id
+        ]
+      );
+      creadas.push(v);
+      total += Number(v.total);
+    }
+
+    await client.query('UPDATE venta_comprobantes SET total = $1 WHERE id = $2', [total, comp.id]);
+
+    await client.query('COMMIT');
+    return res.status(201).json({ ok: true, comprobante: { ...comp, total }, items: creadas });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    if (String(err.message || '').toLowerCase().includes('stock insuficiente')) {
+      return res.status(400).json({ ok: false, error: 'Stock insuficiente' });
+    }
+    return res.status(500).json({ ok: false, error: 'Error creando venta en lote' });
+  } finally {
+    client.release();
+  }
+});
+
+// Listar comprobantes
+app.get('/api/ventas/comprobantes', auth, requireRole('administrador','empleado'), async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT c.id, c.cliente_nombre, c.cedula, c.telefono, c.descripcion, c.total, c.fecha,
+             COUNT(v.id)::int AS lineas
+      FROM venta_comprobantes c
+      LEFT JOIN ventas v ON v.comprobante_id = c.id
+      GROUP BY c.id
+      ORDER BY c.fecha DESC
+      LIMIT 50;
+    `);
+    res.json(rows);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:'Error listando comprobantes' });
+  }
+});
+
+// Detalle de comprobante
+app.get('/api/ventas/comprobantes/:id', auth, requireRole('administrador','empleado'), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ ok:false, error:'ID inválido' });
+
+    const { rows: cab } = await pool.query(`SELECT * FROM venta_comprobantes WHERE id=$1`, [id]);
+    if (!cab.length) return res.status(404).json({ ok:false, error:'Comprobante no existe' });
+
+    const { rows: items } = await pool.query(`
+      SELECT id, producto_id, producto_nombre, precio_unitario, cantidad, total, fecha_venta, descripcion
+      FROM ventas
+      WHERE comprobante_id = $1
+      ORDER BY id ASC
+    `, [id]);
+
+    res.json({ comprobante: cab[0], items });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:'Error obteniendo comprobante' });
+  }
+});
+
+/* ---- Órdenes (encabezado/detalle) ---- */
+app.post('/api/ordenes', auth, requireRole('administrador','empleado'), async (req, res) => {
+  const client = await pool.connect();
+  try {
+    let { cliente_nombre, cedula, telefono, descripcion, items } = req.body;
+
+    if (!cliente_nombre || !cedula || !telefono || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ ok:false, error:'Faltan datos o no hay items' });
+    }
+
+    items = items.map(it => ({
+      producto_id: Number(it.producto_id),
+      cantidad: Number(it.cantidad),
+      precio_unitario: (it.precio_unitario === '' || it.precio_unitario == null)
+        ? null
+        : Number(it.precio_unitario)
+    })).filter(it =>
+      Number.isInteger(it.producto_id) && it.producto_id > 0 &&
+      Number.isInteger(it.cantidad) && it.cantidad >= 1
+    );
+    if (!items.length) return res.status(400).json({ ok:false, error:'Items inválidos' });
+
+    await client.query('BEGIN');
+
+    const { rows: [ord] } = await client.query(
+      `INSERT INTO ventas_ordenes (cliente_nombre, cedula, telefono, descripcion, vendedor_usuario)
+       VALUES ($1,$2,$3,$4,$5)
+       RETURNING *`,
+      [cliente_nombre, cedula, telefono, descripcion || null, req.user?.usuario || null]
+    );
+
+    for (const it of items) {
+      await client.query(
+        `INSERT INTO ventas_items (orden_id, producto_id, precio_unitario, cantidad, producto_nombre, subtotal)
+         VALUES ($1,$2,$3,$4,'',0)`,
+        [ord.id, it.producto_id, it.precio_unitario, it.cantidad]
+      );
+    }
+
+    const { rows: [enc] } = await client.query('SELECT * FROM ventas_ordenes WHERE id=$1', [ord.id]);
+    const { rows: det }   = await client.query('SELECT * FROM ventas_items WHERE orden_id=$1 ORDER BY id', [ord.id]);
+
+    await client.query('COMMIT');
+    res.status(201).json({ ok:true, orden: enc, items: det });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    if (String(err.message || '').toLowerCase().includes('stock insuficiente')) {
+      return res.status(400).json({ ok:false, error:'Stock insuficiente' });
+    }
+    res.status(500).json({ ok:false, error:'Error creando orden' });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/api/ordenes', auth, requireRole('administrador','empleado'), async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        o.id, o.fecha_venta, o.cliente_nombre, o.cedula, o.telefono,
+        o.total, o.estado, o.vendedor_usuario,
+        COUNT(i.id)::int AS lineas
+      FROM ventas_ordenes o
+      LEFT JOIN ventas_items i ON i.orden_id = o.id
+      GROUP BY o.id
+      ORDER BY o.fecha_venta DESC
+      LIMIT 50
+    `);
+    res.json(rows);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:'Error listando órdenes' });
+  }
+});
+
+app.get('/api/ordenes/:id', auth, requireRole('administrador','empleado'), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ ok:false, error:'ID inválido' });
+
+    const { rows: [o] } = await pool.query('SELECT * FROM ventas_ordenes WHERE id=$1', [id]);
+    if (!o) return res.status(404).json({ ok:false, error:'Orden no existe' });
+
+    const { rows: items } = await pool.query(
+      'SELECT * FROM ventas_items WHERE orden_id=$1 ORDER BY id', [id]
+    );
+
+    res.json({ ok:true, orden:o, items });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:'Error obteniendo orden' });
+  }
+});
+
+app.post('/api/ordenes/:id/anular', auth, requireRole('administrador','empleado'), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ ok:false, error:'ID inválido' });
+
+    await pool.query('SELECT ventas_orden_anular($1)', [id]);
+    const { rows:[o] } = await pool.query('SELECT * FROM ventas_ordenes WHERE id=$1', [id]);
+    res.json({ ok:true, orden:o });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:'Error anulando orden' });
+  }
+});
+
+/* =========================================================
+   Servicios
+   ========================================================= */
+// Listar servicios
 app.get('/api/servicios', auth, requireRole('administrador', 'empleado'), async (req, res) => {
   try {
     const { rows } = await pool.query(`
@@ -437,7 +808,6 @@ app.get('/api/servicios', auth, requireRole('administrador', 'empleado'), async 
   }
 });
 
-
 // Crear servicio
 app.post('/api/servicios', auth, requireRole('administrador', 'empleado'), async (req, res) => {
   try {
@@ -447,7 +817,6 @@ app.post('/api/servicios', auth, requireRole('administrador', 'empleado'), async
       valor_total, pago_tipo, monto_abono, observaciones
     } = req.body;
 
-    // Validación mínima (el resto lo asegura Postgres con CHECK)
     const required = [
       nombre_completo, usuario, contrasena, ciudad, telefono, cedula, direccion,
       tipo_equipo, modelo, descripcion_equipo, proceso, valor_total, pago_tipo
@@ -467,7 +836,6 @@ app.post('/api/servicios', auth, requireRole('administrador', 'empleado'), async
         return res.status(400).json({ ok: false, error: 'monto_abono inválido' });
       }
     } else {
-      // 'pagado' → el trigger lo igualará a valor_total
       monto_abono = null;
     }
 
@@ -490,7 +858,6 @@ app.post('/api/servicios', auth, requireRole('administrador', 'empleado'), async
       ]
     );
 
-
     res.status(201).json(rows[0]);
   } catch (err) {
     console.error(err);
@@ -500,8 +867,7 @@ app.post('/api/servicios', auth, requireRole('administrador', 'empleado'), async
   }
 });
 
-
-// (Opcional) Actualizar algunos campos (proceso/observaciones/pagos)
+// Actualizar servicio (algunos campos)
 app.patch('/api/servicios/:id', auth, requireRole('administrador', 'empleado'), async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -537,7 +903,7 @@ app.patch('/api/servicios/:id', auth, requireRole('administrador', 'empleado'), 
   }
 });
 
-//mis servicios clientes
+// Servicios del cliente autenticado
 app.get('/api/servicios/mios', auth, requireRole('cliente'), async (req, res) => {
   try {
     const { usuario } = req.user;
@@ -558,9 +924,253 @@ app.get('/api/servicios/mios', auth, requireRole('cliente'), async (req, res) =>
   }
 });
 
+// Comentarios (listar/crear)
+app.get('/api/servicios/:id/comentarios',
+  auth, requireRole('administrador','empleado','cliente'),
+  async (req,res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ ok:false, error:'ID inválido' });
 
+      const chk = await canAccessService(req, id);
+      if (!chk.ok) return res.status(chk.code).json({ ok:false, error: chk.error });
 
-// Arranque
+      const { rows } = await pool.query(
+        `SELECT id, servicio_id, autor_tipo, autor_usuario, mensaje, created_at
+         FROM servicio_comentarios
+         WHERE servicio_id=$1
+         ORDER BY created_at ASC`,
+        [id]
+      );
+      res.json(rows);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok:false, error:'Error obteniendo comentarios' });
+    }
+  }
+);
+
+app.post('/api/servicios/:id/comentarios',
+  auth, requireRole('administrador','empleado','cliente'),
+  async (req,res) => {
+    try {
+      const id = Number(req.params.id);
+      const { mensaje } = req.body;
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ ok:false, error:'ID inválido' });
+      if (!mensaje || !mensaje.trim()) return res.status(400).json({ ok:false, error:'Mensaje vacío' });
+
+      const chk = await canAccessService(req, id);
+      if (!chk.ok) return res.status(chk.code).json({ ok:false, error: chk.error });
+
+      const autor_tipo = req.user.rol;
+      const autor_usuario = await getUsuarioFromToken(req);
+
+      const { rows } = await pool.query(
+        `INSERT INTO servicio_comentarios (servicio_id, autor_tipo, autor_usuario, mensaje)
+         VALUES ($1,$2,$3,$4)
+         RETURNING id, servicio_id, autor_tipo, autor_usuario, mensaje, created_at`,
+        [id, autor_tipo, autor_usuario, mensaje.trim()]
+      );
+      res.status(201).json(rows[0]);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok:false, error:'Error creando comentario' });
+    }
+  }
+);
+
+/* =========================================================
+   Inventario
+   ========================================================= */
+app.get('/api/inventario', auth, requireRole('administrador','empleado'), async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT id, codigo, nombre, categoria, marca, precio_venta, stock_inicial, stock_actual
+      FROM productos
+      ORDER BY nombre ASC
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ ok:false, error:'Error al obtener inventario' });
+  }
+});
+
+app.get('/api/inventario/kardex/:id', auth, requireRole('administrador','empleado'), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const limit = Math.min(Number(req.query.limit ?? 30), 200);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ ok:false, error:'ID inválido' });
+
+    const { rows } = await pool.query(`
+      SELECT id, fecha, tipo, cantidad, stock_antes, stock_despues,
+             referencia_tipo, referencia_id, comentario, usuario
+      FROM movimientos_inventario
+      WHERE producto_id = $1
+      ORDER BY fecha DESC
+      LIMIT $2
+    `, [id, limit]);
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ ok:false, error:'Error obteniendo kardex' });
+  }
+});
+
+// Ajuste manual
+app.post('/api/inventario/ajuste', auth, requireRole('administrador','empleado'), async (req, res) => {
+  const client = await pool.connect();
+  try {
+    let { producto_id, tipo, cantidad, comentario } = req.body;
+    producto_id = Number(producto_id);
+    cantidad    = Number(cantidad);
+    if (!Number.isInteger(producto_id) || producto_id <= 0) {
+      return res.status(400).json({ ok:false, error:'producto_id inválido' });
+    }
+    if (!['entrada','salida'].includes(tipo)) {
+      return res.status(400).json({ ok:false, error:'tipo debe ser entrada o salida' });
+    }
+    if (!Number.isInteger(cantidad) || cantidad <= 0) {
+      return res.status(400).json({ ok:false, error:'cantidad inválida' });
+    }
+
+    await client.query('BEGIN');
+
+    const { rows: [p] } = await client.query(
+      'SELECT id, codigo, nombre, stock_actual FROM productos WHERE id=$1 FOR UPDATE',
+      [producto_id]
+    );
+    if (!p) { await client.query('ROLLBACK'); return res.status(404).json({ ok:false, error:'Producto no existe' }); }
+
+    const stock_antes = p.stock_actual;
+    let stock_despues = stock_antes;
+    if (tipo === 'entrada') {
+      stock_despues = stock_antes + cantidad;
+    } else {
+      if (stock_antes < cantidad) { await client.query('ROLLBACK'); return res.status(400).json({ ok:false, error:'Stock insuficiente' }); }
+      stock_despues = stock_antes - cantidad;
+    }
+
+    await client.query('UPDATE productos SET stock_actual=$1 WHERE id=$2', [stock_despues, producto_id]);
+
+    const { rows: [mov] } = await client.query(
+      `INSERT INTO movimientos_inventario
+       (producto_id, tipo, cantidad, stock_antes, stock_despues, referencia_tipo, referencia_id, comentario, usuario)
+       VALUES ($1,$2,$3,$4,$5,'ajuste',NULL,$6,$7)
+       RETURNING *`,
+      [producto_id, tipo, cantidad, stock_antes, stock_despues, comentario || null, req.user?.nombre || null]
+    );
+
+    await client.query('COMMIT');
+    res.json({ ok:true, producto: { ...p, stock_actual: stock_despues }, movimiento: mov });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ ok:false, error:'Error al registrar ajuste' });
+  } finally {
+    client.release();
+  }
+});
+
+/* =========================================================
+   Reportes
+   ========================================================= */
+function parseRange(q) {
+  const g = String(q.granularity || "day").toLowerCase();
+  const allowed = new Set(["day","week","month","year"]);
+  const granularity = allowed.has(g) ? g : "day";
+
+  const today = new Date();
+  const to   = q.to ? new Date(q.to) : today;
+  const from = q.from ? new Date(q.from) : new Date(to.getTime() - 30*24*3600*1000);
+
+  return { granularity, from: from.toISOString().slice(0,10), to: to.toISOString().slice(0,10) };
+}
+
+app.get('/api/reportes/ventas', auth, requireRole('administrador','empleado'), async (req, res) => {
+  try {
+    const { granularity, from, to } = parseRange(req.query);
+    const sql = `
+      SELECT date_trunc('${granularity}', v.fecha_venta) AS periodo,
+             SUM(v.total)::numeric(12,2)     AS ingresos,
+             SUM(v.cantidad)::int            AS unidades
+      FROM ventas v
+      WHERE v.fecha_venta >= $1::date
+        AND v.fecha_venta <  ($2::date + INTERVAL '1 day')
+      GROUP BY 1
+      ORDER BY 1;
+    `;
+    const { rows } = await pool.query(sql, [from, to]);
+    res.json({ ok:true, granularity, from, to, rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ ok:false, error:'Error en reporte de ventas' });
+  }
+});
+
+app.get('/api/reportes/utilidad', auth, requireRole('administrador','empleado'), async (req, res) => {
+  try {
+    const { granularity, from, to } = parseRange(req.query);
+    const sql = `
+      SELECT date_trunc('${granularity}', v.fecha_venta) AS periodo,
+             SUM(v.total)::numeric(12,2) AS ingresos,
+             SUM(v.cantidad * p.precio_compra)::numeric(12,2) AS cogs_aprox,
+             (SUM(v.total) - SUM(v.cantidad * p.precio_compra))::numeric(12,2) AS utilidad
+      FROM ventas v
+      JOIN productos p ON p.id = v.producto_id
+      WHERE v.fecha_venta >= $1::date
+        AND v.fecha_venta <  ($2::date + INTERVAL '1 day')
+      GROUP BY 1
+      ORDER BY 1;
+    `;
+    const { rows } = await pool.query(sql, [from, to]);
+    res.json({ ok:true, granularity, from, to, rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ ok:false, error:'Error en reporte de utilidad' });
+  }
+});
+
+app.get('/api/reportes/movimientos', auth, requireRole('administrador','empleado'), async (req, res) => {
+  try {
+    const { granularity, from, to } = parseRange(req.query);
+    const sql = `
+      SELECT date_trunc('${granularity}', m.fecha) AS periodo,
+             SUM(CASE WHEN m.tipo = 'entrada' THEN m.cantidad ELSE 0 END)::int            AS entradas,
+             SUM(CASE WHEN m.tipo IN ('venta','salida') THEN m.cantidad ELSE 0 END)::int   AS salidas,
+             SUM(CASE WHEN m.tipo = 'anulacion' THEN m.cantidad ELSE 0 END)::int          AS anulaciones
+      FROM movimientos_inventario m
+      WHERE m.fecha >= $1::date
+        AND m.fecha <  ($2::date + INTERVAL '1 day')
+      GROUP BY 1
+      ORDER BY 1;
+    `;
+    const { rows } = await pool.query(sql, [from, to]);
+    res.json({ ok:true, granularity, from, to, rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ ok:false, error:'Error en reporte de movimientos' });
+  }
+});
+
+app.get('/api/reportes/inventario-valor', auth, requireRole('administrador','empleado'), async (req, res) => {
+  try {
+    const { rows:[r] } = await pool.query(`
+      SELECT
+        COALESCE(SUM(p.stock_actual * p.precio_compra),0)::numeric(14,2) AS valor_costo,
+        COALESCE(SUM(p.stock_actual * p.precio_venta),0)::numeric(14,2)  AS valor_venta
+      FROM productos p;
+    `);
+    res.json({ ok:true, resumen: r });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ ok:false, error:'Error en valor de inventario' });
+  }
+});
+
+/* =========================================================
+   Arranque
+   ========================================================= */
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`Backend listening on http://localhost:${PORT}`);

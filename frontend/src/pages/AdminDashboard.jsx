@@ -21,67 +21,98 @@ export default function AdminDashboard({ token }) {
     })();
   }, [token]);
 
-  if (err) return <div style={alert}>{err}</div>;
-  if (!data) return <p>Cargando...</p>;
+  if (err)
+    return (
+      <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        {err}
+      </div>
+    );
+
+  if (!data)
+    return (
+      <div className="text-slate-600">Cargando...</div>
+    );
 
   const { summary, last_users } = data;
 
   return (
-    <div style={{ display: "grid", gap: 16 }}>
+    <div className="space-y-6">
       {/* Tarjetas */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 12 }}>
-        <Card title="Total usuarios" value={summary.total} />
-        <Card title="Administradores" value={summary.admins} />
-        <Card title="Empleados" value={summary.empleados} />
-        <Card title="Activos" value={summary.activos} />
-        <Card title="Inactivos" value={summary.inactivos} />
-        <Card title="Dados de baja" value={summary.dados_de_baja} />
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <StatCard title="Total usuarios" value={summary.total} />
+        <StatCard title="Administradores" value={summary.admins} />
+        <StatCard title="Empleados" value={summary.empleados} />
+        <StatCard title="Activos" value={summary.activos} />
+        <StatCard title="Inactivos" value={summary.inactivos} />
+        <StatCard title="Dados de baja" value={summary.dados_de_baja} />
       </div>
 
       {/* Últimos registrados */}
-      <div style={card}>
-        <h3 style={{ marginTop: 0 }}>Últimos registrados</h3>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-glass">
+        <h3 className="mb-3 text-lg font-semibold text-sapphire-900">Últimos registrados</h3>
+
+        <div className="overflow-x-auto">
+          <table className="min-w-full border-collapse text-left text-sm">
             <thead>
-              <tr style={{ background: "#e2e8f0" }}>
-                <th style={th}>ID</th>
-                <th style={th}>Nombre</th>
-                <th style={th}>Usuario</th>
-                <th style={th}>Rol</th>
-                <th style={th}>Estado</th>
-                <th style={th}>Fecha</th>
+              <tr className="bg-slate-100 text-slate-700">
+                <Th>ID</Th>
+                <Th>Nombre</Th>
+                <Th>Usuario</Th>
+                <Th>Rol</Th>
+                <Th>Estado</Th>
+                <Th>Fecha</Th>
               </tr>
             </thead>
             <tbody>
-              {last_users.map(u => (
-                <tr key={u.id}>
-                  <td style={td}>{u.id}</td>
-                  <td style={td}>{u.nombre_completo}</td>
-                  <td style={td}>{u.usuario}</td>
-                  <td style={td}>{u.rol}</td>
-                  <td style={td}>{u.estado}</td>
-                  <td style={td}>{new Date(u.fecha_registro).toLocaleString()}</td>
+              {last_users.map((u) => (
+                <tr key={u.id} className="border-b border-slate-100 hover:bg-slate-50">
+                  <Td>{u.id}</Td>
+                  <Td>{u.nombre_completo}</Td>
+                  <Td>{u.usuario}</Td>
+                  <Td>
+                    <span className="rounded-full bg-sapphire-100 px-2 py-0.5 text-xs font-semibold text-sapphire-800">
+                      {u.rol}
+                    </span>
+                  </Td>
+                  <Td>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                        u.estado === "activo"
+                          ? "bg-green-100 text-green-800"
+                          : "bg-slate-200 text-slate-800"
+                      }`}
+                    >
+                      {u.estado}
+                    </span>
+                  </Td>
+                  <Td>{new Date(u.fecha_registro).toLocaleString()}</Td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      </section>
+    </div>
+  );
+}
+
+function StatCard({ title, value }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-glass">
+      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
+        {title}
+      </div>
+      <div className="mt-1 text-3xl font-bold text-sapphire-900">{value}</div>
+      <div className="mt-2 h-1 w-full rounded bg-sapphire-100">
+        <div className="h-1 w-2/3 rounded bg-sapphire-600" />
       </div>
     </div>
   );
 }
 
-function Card({ title, value }) {
-  return (
-    <div style={card}>
-      <div style={{ color: "#64748b", fontSize: 14 }}>{title}</div>
-      <div style={{ fontSize: 28, fontWeight: 700 }}>{value}</div>
-    </div>
-  );
+function Th({ children }) {
+  return <th className="px-3 py-2">{children}</th>;
 }
-
-const card = { background: "white", border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, boxShadow: "0 1px 2px rgba(0,0,0,0.04)" };
-const alert = { background: "#fee2e2", color: "#991b1b", border: "1px solid #fecaca", padding: 10, borderRadius: 8, marginBottom: 8 };
-const th = { textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" };
-const td = { padding: 8, borderBottom: "1px solid #f1f5f9" };
+function Td({ children }) {
+  return <td className="px-3 py-2">{children}</td>;
+}

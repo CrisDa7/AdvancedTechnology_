@@ -6,6 +6,8 @@ export default function ProductsPage({ token }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  // modal crear
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState({
@@ -19,12 +21,19 @@ export default function ProductsPage({ token }) {
     descripcion: "",
   });
 
-  const rules = useMemo(() => ({
-    codigo: /^[A-Za-z0-9_-]+$/,
-    categoria: /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ ]+$/,
-    precio: (v) => /^(\d+)(\.\d{1,2})?$/.test(v), // 2 decimales máx
-    enteroNoNeg: (v) => /^\d+$/.test(v),
-  }), []);
+  // filtros (borrador en inputs y aplicado en tabla)
+  const [draft, setDraft] = useState({ codigo: "", nombre: "" });
+  const [filters, setFilters] = useState({ codigo: "", nombre: "" });
+
+  const rules = useMemo(
+    () => ({
+      codigo: /^[A-Za-z0-9_-]+$/,
+      categoria: /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ ]+$/,
+      precio: (v) => /^(\d+)(\.\d{1,2})?$/.test(v),
+      enteroNoNeg: (v) => /^\d+$/.test(v),
+    }),
+    []
+  );
 
   const validate = () => {
     const e = {};
@@ -38,13 +47,17 @@ export default function ProductsPage({ token }) {
     return e;
   };
 
-  const fetchItems = async () => {
+  // ---------- data ----------
+  const fetchItems = async (f = filters) => {
     try {
       setLoading(true);
       setError("");
-      const res = await fetch(`${API}/api/productos`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      const params = new URLSearchParams();
+      if (f.codigo?.trim()) params.set("codigo", f.codigo.trim());
+      if (f.nombre?.trim()) params.set("nombre", f.nombre.trim());
+
+      const url = `${API}/api/productos${params.toString() ? `?${params.toString()}` : ""}`;
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "No se pudo obtener productos");
       setItems(data);
@@ -55,22 +68,40 @@ export default function ProductsPage({ token }) {
     }
   };
 
-  useEffect(() => { if (token) fetchItems(); }, [token]);
+  useEffect(() => { if (token) fetchItems({ codigo: "", nombre: "" }); }, [token]);
 
+  const applyFilters = () => {
+    const f = { ...draft };
+    setFilters(f);
+    fetchItems(f);
+  };
+
+  const clearFilters = () => {
+    const f = { codigo: "", nombre: "" };
+    setDraft(f);
+    setFilters(f);
+    fetchItems(f);
+  };
+
+  // ---------- crear ----------
   const onChange = (e) => setForm((f) => ({ ...f, [e.target.name]: e.target.value }));
 
-  const resetForm = () => setForm({
-    codigo: "", nombre: "", categoria: "", marca: "",
-    precio_compra: "", precio_venta: "", stock_inicial: "", descripcion: ""
-  });
+  const resetForm = () =>
+    setForm({
+      codigo: "",
+      nombre: "",
+      categoria: "",
+      marca: "",
+      precio_compra: "",
+      precio_venta: "",
+      stock_inicial: "",
+      descripcion: "",
+    });
 
   const submit = async (e) => {
     e.preventDefault();
     const errs = validate();
-    if (Object.keys(errs).length) {
-      setError(Object.values(errs)[0]);
-      return;
-    }
+    if (Object.keys(errs).length) { setError(Object.values(errs)[0]); return; }
     try {
       setSubmitting(true);
       setError("");
@@ -86,7 +117,7 @@ export default function ProductsPage({ token }) {
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body?.error || "Error al crear producto");
-      setItems((arr) => [body, ...arr]);
+      await fetchItems(filters); // refrescar manteniendo filtros
       resetForm();
       setOpen(false);
     } catch (err) {
@@ -96,144 +127,247 @@ export default function ProductsPage({ token }) {
     }
   };
 
-  if (!token) return <p style={{ padding: 16 }}>Necesitas iniciar sesión.</p>;
+  if (!token) {
+    return (
+      <div className="w-full px-4 md:px-6 py-6">
+        <p className="rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-yellow-800">
+          Necesitas iniciar sesión.
+        </p>
+      </div>
+    );
+  }
 
   return (
-    <div style={{ width: "100%", padding: 24, background: "#eef2ff", minHeight: "100%" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <div>
-          <h1 style={{ fontSize: 28, margin: 0, color: "#1e3a8a" }}>Productos</h1>
-          <small style={{ color: "#64748b" }}>API: <code>{API}</code></small>
+    <div className="min-h-screen bg-sapphire-50">
+      <div className="w-full px-4 md:px-6 py-6">
+        {/* Título y acciones (ÚNICO botón Refrescar) */}
+        <div className="mb-4 flex items-center justify-between">
+          <h1 className="text-2xl font-bold text-sapphire-900">Productos</h1>
+          <div className="flex gap-2">
+            <button
+              onClick={() => fetchItems(filters)}
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+            >
+              Refrescar
+            </button>
+            <button
+              onClick={() => { setError(""); setOpen(true); }}
+              className="rounded-lg bg-sapphire-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sapphire-700 active:translate-y-px"
+            >
+              Agregar producto
+            </button>
+          </div>
         </div>
-        <button style={buttonBlue} onClick={() => { setError(""); setOpen(true); }}>Agregar producto</button>
-      </div>
 
-      <div style={card}>
-        <h3 style={{ marginTop: 0, color: "#1e40af" }}>Listado</h3>
-        {loading ? (
-          <p>Cargando...</p>
-        ) : items.length === 0 ? (
-          <p>No hay productos.</p>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={table}>
-              <thead>
-                <tr style={{ background: "#e5e7eb", color: "black" }}>
-                  <th>ID</th>
-                  <th>Código</th>
-                  <th>Nombre</th>
-                  <th>Categoría</th>
-                  <th>Marca</th>
-                  <th>Compra</th>
-                  <th>Venta</th>
-                  <th>Stock</th>
-                  <th>Fecha</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map(p => (
-                  <tr key={p.id} style={{ color: "black" }}>
-                    <td>{p.id}</td>
-                    <td>{p.codigo}</td>
-                    <td>{p.nombre}</td>
-                    <td>{p.categoria}</td>
-                    <td>{p.marca || "-"}</td>
-                    <td>${Number(p.precio_compra).toFixed(2)}</td>
-                    <td>${Number(p.precio_venta).toFixed(2)}</td>
-                    <td>{p.stock_inicial}</td>
-                    <td>{new Date(p.fecha_registro).toLocaleString()}</td>
+        {/* Filtros (servidor) — sin botón Refrescar aquí */}
+        <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-glass">
+          <h3 className="mb-3 text-base font-semibold text-sapphire-900">Gestión de productos</h3>
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <Field label="Nombre">
+              <input
+                value={draft.nombre}
+                onChange={(e) => setDraft((d) => ({ ...d, nombre: e.target.value }))}
+                className={inputCls}
+                placeholder="Ej: Mouse"
+              />
+            </Field>
+            <Field label="Código">
+              <input
+                value={draft.codigo}
+                onChange={(e) => setDraft((d) => ({ ...d, codigo: e.target.value }))}
+                className={inputCls}
+                placeholder="Empieza por..."
+              />
+            </Field>
+          </div>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              onClick={applyFilters}
+              className="rounded-lg bg-sapphire-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sapphire-700"
+            >
+              Aplicar filtros
+            </button>
+            <button
+              onClick={clearFilters}
+              className="rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-200"
+            >
+              Limpiar
+            </button>
+          </div>
+        </div>
+
+        {/* Listado (SOLO columnas: Código, Nombre, Venta, Stock) */}
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-glass">
+          <h3 className="mb-3 text-base font-semibold text-sapphire-900">Listado</h3>
+
+          {error && (
+            <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+              {error}
+            </div>
+          )}
+
+          {loading ? (
+            <p className="text-slate-600">Cargando...</p>
+          ) : items.length === 0 ? (
+            <p className="text-slate-600">No hay productos.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full border-collapse text-left text-sm text-slate-900">
+                <thead>
+                  <tr className="bg-slate-100 text-slate-700">
+                    <Th>Código</Th>
+                    <Th>Nombre</Th>
+                    <Th>Venta</Th>
+                    <Th>Stock</Th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {items.map((p) => (
+                    <tr key={p.id} className="border-b border-slate-100 hover:bg-slate-50">
+                      <Td>{p.codigo}</Td>
+                      <Td>{p.nombre}</Td>
+                      <Td>${Number(p.precio_venta).toFixed(2)}</Td>
+                      <Td>{p.stock_actual ?? p.stock_inicial}</Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* MODAL crear */}
+        {open && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
+            <div
+              role="dialog"
+              aria-modal="true"
+              className="w-full max-w-3xl rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl"
+            >
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-slate-900">Agregar producto</h3>
+                <button
+                  onClick={() => setOpen(false)}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 hover:bg-slate-50"
+                  aria-label="Cerrar"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {error && (
+                <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+                  {error}
+                </div>
+              )}
+
+              <form onSubmit={submit} className="grid gap-3">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <Field label="Código" htmlFor="codigo">
+                    <input id="codigo" name="codigo" value={form.codigo} onChange={onChange} className={inputCls} />
+                  </Field>
+                  <Field label="Nombre" htmlFor="nombre">
+                    <input id="nombre" name="nombre" value={form.nombre} onChange={onChange} className={inputCls} />
+                  </Field>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <Field label="Categoría" htmlFor="categoria">
+                    <input id="categoria" name="categoria" value={form.categoria} onChange={onChange} className={inputCls} />
+                  </Field>
+                  <Field label="Marca" htmlFor="marca">
+                    <input id="marca" name="marca" value={form.marca} onChange={onChange} className={inputCls} />
+                  </Field>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                  <Field label="Precio compra" htmlFor="precio_compra">
+                    <input
+                      id="precio_compra"
+                      name="precio_compra"
+                      inputMode="decimal"
+                      placeholder="0.00"
+                      value={form.precio_compra}
+                      onChange={onChange}
+                      className={inputCls}
+                    />
+                  </Field>
+                  <Field label="Precio venta" htmlFor="precio_venta">
+                    <input
+                      id="precio_venta"
+                      name="precio_venta"
+                      inputMode="decimal"
+                      placeholder="0.00"
+                      value={form.precio_venta}
+                      onChange={onChange}
+                      className={inputCls}
+                    />
+                  </Field>
+                  <Field label="Stock inicial" htmlFor="stock_inicial">
+                    <input
+                      id="stock_inicial"
+                      name="stock_inicial"
+                      inputMode="numeric"
+                      placeholder="0"
+                      value={form.stock_inicial}
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, stock_inicial: e.target.value.replace(/\D/g, "") }))
+                      }
+                      className={inputCls}
+                    />
+                  </Field>
+                </div>
+
+                <Field label="Descripción" htmlFor="descripcion">
+                  <textarea
+                    id="descripcion"
+                    name="descripcion"
+                    value={form.descripcion}
+                    onChange={onChange}
+                    className={`${inputCls} min-h-[80px]`}
+                  />
+                </Field>
+
+                <div className="mt-2 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { setOpen(false); resetForm(); setError(""); }}
+                    className="rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-200"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={submitting}
+                    className="rounded-lg bg-sapphire-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sapphire-700 disabled:opacity-70"
+                  >
+                    {submitting ? "Guardando..." : "Guardar"}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
         )}
       </div>
-
-      {/* MODAL */}
-      {open && (
-        <div style={backdrop}>
-          <div style={modal} role="dialog" aria-modal>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <h3 style={{ margin: 0 }}>Agregar producto</h3>
-              <button onClick={() => setOpen(false)} style={buttonGhost}>✕</button>
-            </div>
-
-            {error && <div style={alert}>{error}</div>}
-
-            <form onSubmit={submit} style={{ display: "grid", gap: 12 }}>
-              <div style={gridResponsive}>
-                <Field label="Código" htmlFor="codigo">
-                  <input id="codigo" name="codigo" value={form.codigo} onChange={onChange} style={input} />
-                </Field>
-                <Field label="Nombre" htmlFor="nombre">
-                  <input id="nombre" name="nombre" value={form.nombre} onChange={onChange} style={input} />
-                </Field>
-              </div>
-
-              <div style={gridResponsive}>
-                <Field label="Categoría" htmlFor="categoria">
-                  <input id="categoria" name="categoria" value={form.categoria} onChange={onChange} style={input} />
-                </Field>
-                <Field label="Marca" htmlFor="marca">
-                  <input id="marca" name="marca" value={form.marca} onChange={onChange} style={input} />
-                </Field>
-              </div>
-
-              <div style={gridResponsive}>
-                <Field label="Precio compra" htmlFor="precio_compra">
-                  <input id="precio_compra" name="precio_compra" inputMode="decimal" value={form.precio_compra}
-                         onChange={onChange} style={input} placeholder="0.00" />
-                </Field>
-                <Field label="Precio venta" htmlFor="precio_venta">
-                  <input id="precio_venta" name="precio_venta" inputMode="decimal" value={form.precio_venta}
-                         onChange={onChange} style={input} placeholder="0.00" />
-                </Field>
-                <Field label="Stock inicial" htmlFor="stock_inicial">
-                  <input id="stock_inicial" name="stock_inicial" inputMode="numeric" value={form.stock_inicial}
-                         onChange={(e) => setForm(f => ({ ...f, stock_inicial: e.target.value.replace(/\\D/g, '') }))}
-                         style={input} placeholder="0" />
-                </Field>
-              </div>
-
-              <Field label="Descripción" htmlFor="descripcion">
-                <textarea id="descripcion" name="descripcion" value={form.descripcion} onChange={onChange}
-                          style={{ ...input, minHeight: 80 }} />
-              </Field>
-
-              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                <button type="button" onClick={() => { setOpen(false); resetForm(); setError(""); }} style={buttonGray}>
-                  Cancelar
-                </button>
-                <button type="submit" disabled={submitting} style={buttonBlue}>
-                  {submitting ? "Guardando..." : "Guardar"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
+/* --------- Helpers UI --------- */
+
 function Field({ label, htmlFor, children }) {
   return (
-    <label htmlFor={htmlFor} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 14, color: "#1f2937" }}>
+    <label htmlFor={htmlFor} className="flex flex-col gap-1 text-sm text-slate-700">
       <span>{label}</span>
       {children}
     </label>
   );
 }
 
-// estilos reutilizados
-const card = { background: "white", border: "1px solid #dbeafe", borderRadius: 12, padding: 16, boxShadow: "0 2px 4px rgba(0,0,0,0.05)", width: "100%" };
-const alert = { background: "#fee2e2", color: "#991b1b", border: "1px solid #fecaca", padding: 10, borderRadius: 8, marginBottom: 8 };
-const gridResponsive = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 };
-const input = { padding: 10, borderRadius: 8, border: "1px solid #cbd5e1", outline: "none" };
-const buttonBlue = { padding: "10px 14px", borderRadius: 8, border: "none", background: "#1d4ed8", color: "white", cursor: "pointer" };
-const buttonGray = { padding: "10px 14px", borderRadius: 8, border: "1px solid #d1d5db", background: "#f3f4f6", color: "#111827", cursor: "pointer" };
-const buttonGhost = { padding: "6px 10px", borderRadius: 8, border: "1px solid #e5e7eb", background: "white", color: "#111827", cursor: "pointer" };
-const table = { width: "100%", borderCollapse: "collapse" };
-const backdrop = { position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 };
-const modal = { background: "white", borderRadius: 12, border: "1px solid #e5e7eb", width: "min(820px, 100%)", padding: 16, boxShadow: "0 10px 30px rgba(0,0,0,0.2)" };
+function Th({ children }) { return <th className="px-3 py-2">{children}</th>; }
+function Td({ children }) { return <td className="px-3 py-2">{children}</td>; }
+
+const inputCls =
+  "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 outline-none focus:border-sapphire-400 focus:ring-2 focus:ring-sapphire-400/40";

@@ -28,6 +28,8 @@ export default function EmployeeLayout({ user, onLogout }) {
           <NavItem to="/empleado/productos">Productos</NavItem>
           <NavItem to="/empleado/ventas">Ventas</NavItem>
           <NavItem to="/empleado/servicios">Servicios</NavItem>
+          <NavItem to="/empleado/inventario">Inventario</NavItem>
+          <NavItem to="/empleado/reportes">Reportes</NavItem> 
 
 
         </nav>

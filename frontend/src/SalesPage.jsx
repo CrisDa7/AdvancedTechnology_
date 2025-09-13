@@ -3,77 +3,101 @@ import { useEffect, useMemo, useState } from "react";
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
 export default function SalesPage({ token }) {
-  const [ventas, setVentas] = useState([]);
+  // Listado de órdenes
+  const [ordenes, setOrdenes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // Modal
+  // Búsqueda por nombre de cliente (filtrado local)
+  const [buscarNombre, setBuscarNombre] = useState("");
+
+  // Modal crear
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  // Formulario
+  // Detalle (ver items de una orden)
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detail, setDetail] = useState(null); // {orden, items}
+  const [loadingDetail, setLoadingDetail] = useState(false);
+
+  // Datos del cliente + nota
   const [form, setForm] = useState({
     cliente_nombre: "",
     cedula: "",
     telefono: "",
-    producto_id: null,
-    producto_label: "",
-    cantidad: "1",
-    precio_unitario: "", // opcional; si lo dejas vacío usa el precio del producto
     descripcion: "",
   });
 
-  // Buscador de productos
+  // Buscador y líneas (carrito)
   const [q, setQ] = useState("");
   const [suggestions, setSuggestions] = useState([]);
   const [fetchingSug, setFetchingSug] = useState(false);
   const debouncedQ = useDebounce(q, 300);
 
-  const rules = useMemo(() => ({
-    nombre: /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ ]+$/,
-    cedula: /^\d{10}$/,
-    telefono: /^\d{10}$/,
-    enteroPos: (v) => /^\d+$/.test(v) && Number(v) >= 1,
-    precio: (v) => v === "" || /^(\d+)(\.\d{1,2})?$/.test(v),
-  }), []);
+  const [lineas, setLineas] = useState([]); // {id,codigo,nombre,precio_sugerido,cantidad,precio_unitario?}
+
+  // Validaciones
+  const rules = useMemo(
+    () => ({
+      nombre: /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ ]+$/,
+      cedula: /^\d{10}$/,
+      telefono: /^\d{10}$/,
+      enteroPos: (v) => /^\d+$/.test(v) && Number(v) >= 1,
+      precio: (v) => v === "" || /^(\d+)(\.\d{1,2})?$/.test(v),
+    }),
+    []
+  );
 
   const validate = () => {
     const e = {};
-    if (!rules.nombre.test(form.cliente_nombre)) e.cliente_nombre = "Nombre: solo letras y espacios";
+    if (!rules.nombre.test(form.cliente_nombre))
+      e.cliente_nombre = "Nombre: solo letras y espacios";
     if (!rules.cedula.test(form.cedula)) e.cedula = "Cédula: 10 dígitos";
     if (!rules.telefono.test(form.telefono)) e.telefono = "Teléfono: 10 dígitos";
-    if (!form.producto_id) e.producto_id = "Selecciona un producto";
-    if (!rules.enteroPos(form.cantidad)) e.cantidad = "Cantidad ≥ 1 (entero)";
-    if (!rules.precio(String(form.precio_unitario))) e.precio_unitario = "Precio inválido (máx 2 decimales)";
+    if (!lineas.length) e.lineas = "Agrega al menos un producto";
+    for (const ln of lineas) {
+      if (!rules.enteroPos(String(ln.cantidad)))
+        return { cantidad: "Cantidad ≥ 1 (entero)" };
+      if (!rules.precio(String(ln.precio_unitario ?? "")))
+        return { precio_unitario: "Precio inválido (máx 2 decimales)" };
+    }
     return e;
   };
 
-  // Cargar ventas recientes
-  const fetchVentas = async () => {
+  // ====== Cargar órdenes ======
+  const fetchOrdenes = async () => {
     try {
       setLoading(true);
       setError("");
-      const res = await fetch(`${API}/api/ventas`, { headers: { Authorization: `Bearer ${token}` } });
+      const res = await fetch(`${API}/api/ordenes`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "No se pudo obtener ventas");
-      setVentas(data);
+      if (!res.ok) throw new Error(data?.error || "No se pudo obtener órdenes");
+      setOrdenes(data);
     } catch (err) {
-      setError(err.message || "Error al cargar ventas");
+      setError(err.message || "Error al cargar órdenes");
     } finally {
       setLoading(false);
     }
   };
-  useEffect(() => { if (token) fetchVentas(); }, [token]);
+  useEffect(() => {
+    if (token) fetchOrdenes();
+  }, [token]);
 
-  // Buscar productos (código o nombre)
+  // ====== Buscar productos (código o nombre) ======
   useEffect(() => {
     (async () => {
-      if (!debouncedQ) { setSuggestions([]); return; }
+      if (!debouncedQ) {
+        setSuggestions([]);
+        return;
+      }
       try {
         setFetchingSug(true);
-        const res = await fetch(`${API}/api/productos/search?q=${encodeURIComponent(debouncedQ)}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const res = await fetch(
+          `${API}/api/productos/search?q=${encodeURIComponent(debouncedQ)}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
         const data = await res.json();
         if (res.ok) setSuggestions(data);
       } finally {
@@ -83,38 +107,49 @@ export default function SalesPage({ token }) {
   }, [debouncedQ, token]);
 
   const pickProduct = (p) => {
-    setForm(f => ({
-      ...f,
-      producto_id: p.id,
-      producto_label: `${p.codigo} — ${p.nombre}`,
-      precio_unitario: p.precio_venta?.toString() ?? "",
-    }));
+    setLineas((arr) => {
+      const i = arr.findIndex((x) => x.id === p.id);
+      if (i >= 0) {
+        const copy = [...arr];
+        copy[i] = { ...copy[i], cantidad: copy[i].cantidad + 1 };
+        return copy;
+      }
+      return [
+        ...arr,
+        {
+          id: p.id,
+          codigo: p.codigo,
+          nombre: p.nombre,
+          precio_sugerido: Number(p.precio_venta) || 0,
+          cantidad: 1,
+        },
+      ];
+    });
     setQ("");
     setSuggestions([]);
   };
 
-  const onChange = (e) => {
+  const updateLinea = (idx, patch) =>
+    setLineas((arr) => arr.map((ln, i) => (i === idx ? { ...ln, ...patch } : ln)));
+
+  const removeLinea = (idx) => setLineas((arr) => arr.filter((_, i) => i !== idx));
+
+  const totalPreview = lineas.reduce((acc, ln) => {
+    const pu =
+      ln.precio_unitario === "" || ln.precio_unitario == null
+        ? ln.precio_sugerido
+        : Number(ln.precio_unitario);
+    return acc + pu * Number(ln.cantidad || 0);
+  }, 0);
+
+  const onChangeForm = (e) => {
     const { name, value } = e.target;
-    if (name === "cedula" || name === "telefono") {
-      return setForm(f => ({ ...f, [name]: value.replace(/\D/g, "").slice(0, 10) }));
-    }
-    if (name === "cantidad") {
-      return setForm(f => ({ ...f, [name]: value.replace(/\D/g, "") }));
-    }
-    setForm(f => ({ ...f, [name]: value }));
+    if (name === "cedula" || name === "telefono")
+      return setForm((f) => ({ ...f, [name]: value.replace(/\D/g, "").slice(0, 10) }));
+    setForm((f) => ({ ...f, [name]: value }));
   };
 
-  const resetForm = () => setForm({
-    cliente_nombre: "",
-    cedula: "",
-    telefono: "",
-    producto_id: null,
-    producto_label: "",
-    cantidad: "1",
-    precio_unitario: "",
-    descripcion: "",
-  });
-
+  // ====== Crear orden ======
   const submit = async (e) => {
     e.preventDefault();
     const errs = validate();
@@ -128,210 +163,526 @@ export default function SalesPage({ token }) {
         cliente_nombre: form.cliente_nombre,
         cedula: form.cedula,
         telefono: form.telefono,
-        producto_id: Number(form.producto_id),
-        cantidad: Number(form.cantidad),
         descripcion: form.descripcion || undefined,
+        items: lineas.map((ln) => {
+          const item = {
+            producto_id: Number(ln.id),
+            cantidad: Number(ln.cantidad),
+          };
+          if (ln.precio_unitario !== "" && ln.precio_unitario != null) {
+            item.precio_unitario = Number(ln.precio_unitario);
+          }
+          return item;
+        }),
       };
-      if (form.precio_unitario !== "") {
-        payload.precio_unitario = Number(form.precio_unitario);
-      }
 
-      const res = await fetch(`${API}/api/ventas`, {
+      const res = await fetch(`${API}/api/ordenes`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify(payload),
       });
       const body = await res.json();
-      if (!res.ok) throw new Error(body?.error || "Error al crear venta");
+      if (!res.ok) throw new Error(body?.error || "Error al crear orden");
 
-      setVentas(v => [body, ...v]);   // agrega arriba
-      resetForm();
+      // prepend la nueva orden al listado
+      setOrdenes((v) => [body.orden, ...v]);
+
+      // limpiar modal
+      setLineas([]);
+      setForm({ cliente_nombre: "", cedula: "", telefono: "", descripcion: "" });
       setOpen(false);
-      // window.alert("Venta registrada"); // opcional
     } catch (err) {
-      setError(err.message || "Error al crear venta");
+      setError(err.message || "Error al crear orden");
     } finally {
       setSubmitting(false);
     }
   };
 
-  if (!token) return <p style={{ padding: 16 }}>Necesitas iniciar sesión.</p>;
+  // ====== Ver detalle ======
+  const openDetailFor = async (id) => {
+    try {
+      setLoadingDetail(true);
+      setDetailOpen(true);
+      const res = await fetch(`${API}/api/ordenes/${id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "No se pudo obtener la orden");
+      setDetail(data);
+    } catch (e) {
+      setDetail(null);
+    } finally {
+      setLoadingDetail(false);
+    }
+  };
+
+  // ====== Filtrado por nombre (local) ======
+  const ordenesFiltradas = useMemo(() => {
+    const term = buscarNombre.trim().toLowerCase();
+    if (!term) return ordenes;
+    return ordenes.filter((o) =>
+      String(o.cliente_nombre || "").toLowerCase().includes(term)
+    );
+  }, [ordenes, buscarNombre]);
+
+  if (!token) {
+    return (
+      <div className="w-full px-4 md:px-6 py-6">
+        <p className="rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-yellow-800">
+          Necesitas iniciar sesión.
+        </p>
+      </div>
+    );
+  }
 
   return (
-    <div style={{ width: "100%", padding: 24, background: "#eef2ff", minHeight: "100%" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <div>
-          <h1 style={{ fontSize: 28, margin: 0, color: "#1e3a8a" }}>Ventas</h1>
-          <small style={{ color: "#64748b" }}>API: <code>{API}</code></small>
-        </div>
-        <button style={buttonBlue} onClick={() => { setError(""); setOpen(true); }}>Agregar venta</button>
-      </div>
-
-      <div style={card}>
-        <h3 style={{ marginTop: 0, color: "#1e40af" }}>Últimas ventas</h3>
-        {loading ? (
-          <p>Cargando...</p>
-        ) : ventas.length === 0 ? (
-          <p>No hay ventas.</p>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={table}>
-              <thead>
-                <tr style={{ background: "#e5e7eb", color: "black" }}>
-                  <th>Fecha</th>
-                  <th>Cliente</th>
-                  <th>Cédula</th>
-                  <th>Teléfono</th>
-                  <th>Producto</th>
-                  <th>Cant.</th>
-                  <th>Precio</th>
-                  <th>Total</th>
-                  <th>Nota</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ventas.map(v => (
-                  <tr key={v.id} style={{ color: "black" }}>
-                    <td>{new Date(v.fecha_venta).toLocaleString()}</td>
-                    <td>{v.cliente_nombre}</td>
-                    <td>{v.cedula}</td>
-                    <td>{v.telefono}</td>
-                    <td>{v.producto_nombre}</td>
-                    <td>{v.cantidad}</td>
-                    <td>${Number(v.precio_unitario).toFixed(2)}</td>
-                    <td>${Number(v.total).toFixed(2)}</td>
-                    <td>{v.descripcion || "-"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+    <div className="min-h-screen bg-sapphire-50">
+      <div className="w-full px-4 md:px-6 py-6">
+        {/* Título y acciones */}
+        <div className="mb-4 flex items-center justify-between">
+          <h1 className="text-2xl font-bold text-sapphire-900">Ventas</h1>
+          <div className="flex gap-2">
+            <button
+              onClick={fetchOrdenes}
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+            >
+              Refrescar
+            </button>
+            <button
+              onClick={() => {
+                setError("");
+                setOpen(true);
+              }}
+              className="rounded-lg bg-sapphire-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sapphire-700 active:translate-y-px"
+            >
+              Agregar venta
+            </button>
           </div>
-        )}
-      </div>
+        </div>
 
-      {/* MODAL */}
-      {open && (
-        <div style={backdrop}>
-          <div style={modal} role="dialog" aria-modal>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <h3 style={{ margin: 0 }}>Agregar venta</h3>
-              <button onClick={() => setOpen(false)} style={buttonGhost}>✕</button>
+        {/* Búsqueda por nombre de cliente */}
+        <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-glass">
+          <h3 className="mb-3 text-base font-semibold text-sapphire-900">
+            Buscar órdenes por cliente
+          </h3>
+          <div className="grid grid-cols-1 gap-3 md:max-w-xl">
+            <Field label="Nombre del cliente">
+              <input
+                value={buscarNombre}
+                onChange={(e) => setBuscarNombre(e.target.value)}
+                placeholder="Ej: Ana, Juan Pérez..."
+                className={inputCls}
+              />
+            </Field>
+          </div>
+
+          {/* Botón LIMPIAR */}
+          <div className="mt-3">
+            <button
+              onClick={() => setBuscarNombre("")}
+              className="rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-200"
+            >
+              Limpiar
+            </button>
+          </div>
+
+          {buscarNombre.trim() && (
+            <div className="mt-2 text-xs text-slate-600">
+              Mostrando resultados para <b>{buscarNombre.trim()}</b>
             </div>
+          )}
+        </div>
 
-            {error && <div style={alertBox}>{error}</div>}
+        {/* Listado de órdenes (solo columnas: Cliente, Total, Estado, Acciones) */}
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-glass">
+          <h3 className="mb-3 text-base font-semibold text-sapphire-900">Órdenes recientes</h3>
 
-            <form onSubmit={submit} style={{ display: "grid", gap: 12 }}>
-              <div style={grid}>
-                <Field label="Nombre del cliente" htmlFor="cliente_nombre">
-                  <input id="cliente_nombre" name="cliente_nombre" value={form.cliente_nombre} onChange={onChange} style={input} />
-                </Field>
-                <Field label="Cédula (10 dígitos)" htmlFor="cedula">
-                  <input id="cedula" name="cedula" value={form.cedula} onChange={onChange} style={input} />
-                </Field>
-                <Field label="Teléfono (10 dígitos)" htmlFor="telefono">
-                  <input id="telefono" name="telefono" value={form.telefono} onChange={onChange} style={input} />
-                </Field>
+          {error && (
+            <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+              {error}
+            </div>
+          )}
+
+          {loading ? (
+            <p className="text-slate-600">Cargando...</p>
+          ) : ordenesFiltradas.length === 0 ? (
+            <p className="text-slate-600">Sin resultados.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full border-collapse text-left text-sm text-slate-900">
+                <thead>
+                  <tr className="bg-slate-100 text-slate-700">
+                    <Th>Cliente</Th>
+                    <Th>Total</Th>
+                    <Th>Estado</Th>
+                    <Th>Acciones</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ordenesFiltradas.map((o) => (
+                    <tr key={o.id} className="border-b border-slate-100 hover:bg-slate-50">
+                      <Td className="font-medium">{o.cliente_nombre}</Td>
+                      <Td>${Number(o.total).toFixed(2)}</Td>
+                      <Td>
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                            o.estado === "emitida"
+                              ? "bg-green-100 text-green-800"
+                              : "bg-slate-200 text-slate-800"
+                          }`}
+                        >
+                          {o.estado}
+                        </span>
+                      </Td>
+                      <Td>
+                        <button
+                          onClick={() => openDetailFor(o.id)}
+                          className="rounded-md border border-slate-300 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-800 hover:bg-slate-200"
+                        >
+                          Ver detalle
+                        </button>
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* MODAL: crear orden */}
+        {open && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
+            <div
+              role="dialog"
+              aria-modal="true"
+              className="w-full max-w-5xl rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl"
+            >
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-slate-900">Agregar venta</h3>
+                <button
+                  onClick={() => setOpen(false)}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 hover:bg-slate-50"
+                  aria-label="Cerrar"
+                >
+                  ✕
+                </button>
               </div>
 
-              {/* Buscador por código o nombre */}
-              <div style={{ position: "relative" }}>
-                <Field label="Producto (código o nombre)" htmlFor="producto_search">
-                  <input
-                    id="producto_search"
-                    value={q}
-                    onChange={(e) => setQ(e.target.value)}
-                    placeholder="Ej: PR0001, Mouse"
-                    style={input}
+              {error && (
+                <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+                  {error}
+                </div>
+              )}
+
+              <form onSubmit={submit} className="grid gap-4">
+                {/* Datos del cliente */}
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                  <Field label="Nombre del cliente" htmlFor="cliente_nombre">
+                    <input
+                      id="cliente_nombre"
+                      name="cliente_nombre"
+                      value={form.cliente_nombre}
+                      onChange={onChangeForm}
+                      className={inputCls}
+                    />
+                  </Field>
+                  <Field label="Cédula (10 dígitos)" htmlFor="cedula">
+                    <input
+                      id="cedula"
+                      name="cedula"
+                      value={form.cedula}
+                      onChange={onChangeForm}
+                      className={inputCls}
+                    />
+                  </Field>
+                  <Field label="Teléfono (10 dígitos)" htmlFor="telefono">
+                    <input
+                      id="telefono"
+                      name="telefono"
+                      value={form.telefono}
+                      onChange={onChangeForm}
+                      className={inputCls}
+                    />
+                  </Field>
+                </div>
+
+                {/* Buscador de productos */}
+                <div className="relative">
+                  <Field label="Producto (código o nombre)" htmlFor="producto_search">
+                    <input
+                      id="producto_search"
+                      value={q}
+                      onChange={(e) => setQ(e.target.value)}
+                      placeholder="Ej: PR0001, Mouse"
+                      className={inputCls}
+                    />
+                  </Field>
+
+                  {(suggestions.length > 0 || fetchingSug) && (
+                    <div className="absolute left-0 right-0 z-50 mt-2 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl">
+                      {fetchingSug && (
+                        <div className="px-3 py-2 text-sm text-slate-600">Buscando...</div>
+                      )}
+                      {suggestions.map((s) => (
+                        <button
+                          type="button"
+                          key={s.id}
+                          onClick={() => pickProduct(s)}
+                          className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-slate-50"
+                        >
+                          <div>
+                            <b>{s.codigo}</b> — {s.nombre}
+                          </div>
+                          <small className="text-slate-600">
+                            ${Number(s.precio_venta).toFixed(2)}
+                          </small>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Líneas seleccionadas */}
+                <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                  <h4 className="mb-3 text-sm font-semibold text-sapphire-900">
+                    Productos seleccionados
+                  </h4>
+                  {lineas.length === 0 ? (
+                    <p className="text-sm text-slate-600">Aún no has agregado productos.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full border-collapse text-left text-sm">
+                        <thead>
+                          <tr className="bg-slate-100 text-slate-700">
+                            <Th>Producto</Th>
+                            <Th className="w-28">Cantidad</Th>
+                            <Th className="w-40">Precio unit.</Th>
+                            <Th className="w-32">Subtotal</Th>
+                            <Th className="w-16"></Th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {lineas.map((ln, idx) => {
+                            const pu =
+                              ln.precio_unitario === "" || ln.precio_unitario == null
+                                ? ln.precio_sugerido
+                                : Number(ln.precio_unitario);
+                            const sub = pu * Number(ln.cantidad || 0);
+                            return (
+                              <tr key={ln.id} className="border-b border-slate-100">
+                                <Td>
+                                  <div className="flex flex-col">
+                                    <span className="font-medium">
+                                      {ln.codigo} — {ln.nombre}
+                                    </span>
+                                    <small className="text-slate-500">
+                                      Precio sugerido: ${ln.precio_sugerido.toFixed(2)}
+                                    </small>
+                                  </div>
+                                </Td>
+                                <Td>
+                                  <input
+                                    className={inputCls}
+                                    value={ln.cantidad}
+                                    onChange={(e) =>
+                                      updateLinea(idx, {
+                                        cantidad: e.target.value.replace(/\D/g, ""),
+                                      })
+                                    }
+                                  />
+                                </Td>
+                                <Td>
+                                  <input
+                                    className={inputCls}
+                                    placeholder="Auto"
+                                    value={ln.precio_unitario ?? ""}
+                                    onChange={(e) =>
+                                      updateLinea(idx, {
+                                        precio_unitario: e.target.value.replace(/[^0-9.]/g, ""),
+                                      })
+                                    }
+                                  />
+                                </Td>
+                                <Td>${sub.toFixed(2)}</Td>
+                                <Td>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeLinea(idx)}
+                                    className="rounded-md border border-slate-300 bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-800 hover:bg-slate-200"
+                                  >
+                                    Quitar
+                                  </button>
+                                </Td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* Total */}
+                  <div className="mt-3 flex items-center justify-end">
+                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-right">
+                      <div className="text-xs text-slate-600">Total</div>
+                      <div className="text-lg font-bold text-sapphire-900">
+                        ${totalPreview.toFixed(2)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <Field label="Nota / Descripción" htmlFor="descripcion">
+                  <textarea
+                    id="descripcion"
+                    name="descripcion"
+                    value={form.descripcion}
+                    onChange={onChangeForm}
+                    className={`${inputCls} min-h-[80px]`}
                   />
                 </Field>
 
-                {(suggestions.length > 0 || fetchingSug) && (
-                  <div style={dropdown}>
-                    {fetchingSug && <div style={sugItem}>Buscando...</div>}
-                    {suggestions.map(s => (
-                      <div key={s.id} style={sugItem} onClick={() => pickProduct(s)}>
-                        <div><b>{s.codigo}</b> — {s.nombre}</div>
-                        <small>${Number(s.precio_venta).toFixed(2)}</small>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {form.producto_label && (
-                  <div style={{ marginTop: 6, fontSize: 13, color: "#334155" }}>
-                    Seleccionado: <b>{form.producto_label}</b>
-                  </div>
-                )}
-              </div>
-
-              <div style={grid}>
-                <Field label="Cantidad" htmlFor="cantidad">
-                  <input id="cantidad" name="cantidad" value={form.cantidad} onChange={onChange} style={input} />
-                </Field>
-                <Field label="Precio unitario (opcional)" htmlFor="precio_unitario">
-                  <input id="precio_unitario" name="precio_unitario" value={form.precio_unitario} onChange={onChange} style={input} placeholder="Auto si lo dejas vacío" />
-                </Field>
-              </div>
-
-              <Field label="Descripción" htmlFor="descripcion">
-                <textarea id="descripcion" name="descripcion" value={form.descripcion} onChange={onChange} style={{ ...input, minHeight: 80 }} />
-              </Field>
-
-              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                <button type="button" onClick={() => { setOpen(false); resetForm(); setError(""); }} style={buttonGray}>Cancelar</button>
-                <button type="submit" disabled={submitting} style={buttonBlue}>{submitting ? "Guardando..." : "Guardar"}</button>
-              </div>
-            </form>
+                <div className="mt-2 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpen(false);
+                      setLineas([]);
+                      setError("");
+                    }}
+                    className="rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-200"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={submitting}
+                    className="rounded-lg bg-sapphire-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sapphire-700 disabled:opacity-70"
+                  >
+                    {submitting ? "Guardando..." : "Guardar venta"}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+
+        {/* MODAL: detalle de orden */}
+        {detailOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
+            <div className="w-full max-w-3xl rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl">
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-slate-900">Detalle de orden</h3>
+                <button
+                  onClick={() => {
+                    setDetailOpen(false);
+                    setDetail(null);
+                  }}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 hover:bg-slate-50"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {loadingDetail ? (
+                <p className="text-slate-600">Cargando...</p>
+              ) : !detail ? (
+                <p className="text-slate-600">No se pudo obtener el detalle.</p>
+              ) : (
+                <>
+                  <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                      <div className="text-xs text-slate-600">Cliente</div>
+                      <div className="font-semibold text-sapphire-900">
+                        {detail.orden.cliente_nombre}
+                      </div>
+                      <div className="text-xs text-slate-600">
+                        CI: {detail.orden.cedula} • Tel: {detail.orden.telefono}
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-right">
+                      <div className="text-xs text-slate-600">Total</div>
+                      <div className="text-lg font-bold text-sapphire-900">
+                        ${Number(detail.orden.total).toFixed(2)}
+                      </div>
+                      <div className="text-xs text-slate-600">
+                        {new Date(detail.orden.fecha_venta).toLocaleString()}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                    <h4 className="mb-3 text-sm font-semibold text-sapphire-900">Items</h4>
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full border-collapse text-left text-sm">
+                        <thead>
+                          <tr className="bg-slate-100 text-slate-700">
+                            <Th>Producto</Th>
+                            <Th className="w-28">Cantidad</Th>
+                            <Th className="w-32">P. unit</Th>
+                            <Th className="w-32">Subtotal</Th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {detail.items.map((it) => (
+                            <tr key={it.id} className="border-b border-slate-100">
+                              <Td>{it.producto_nombre}</Td>
+                              <Td>{it.cantidad}</Td>
+                              <Td>${Number(it.precio_unitario).toFixed(2)}</Td>
+                              <Td>${Number(it.subtotal).toFixed(2)}</Td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {detail.orden.descripcion && (
+                      <div className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+                        <span className="font-semibold">Nota: </span>
+                        {detail.orden.descripcion}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
+/* ---------- Helpers ---------- */
+
 function Field({ label, htmlFor, children }) {
   return (
-    <label htmlFor={htmlFor} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 14, color: "#1f2937" }}>
+    <label htmlFor={htmlFor} className="flex flex-col gap-1 text-sm text-slate-700">
       <span>{label}</span>
       {children}
     </label>
   );
 }
 
+function Th({ children, className = "" }) {
+  return <th className={`px-3 py-2 ${className}`}>{children}</th>;
+}
+
+function Td({ children, className = "" }) {
+  return <td className={`px-3 py-2 ${className}`}>{children}</td>;
+}
+
 function useDebounce(value, ms = 300) {
   const [v, setV] = useState(value);
-  useEffect(() => { const t = setTimeout(() => setV(value), ms); return () => clearTimeout(t); }, [value, ms]);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
   return v;
 }
 
-/* estilos */
-const card = { background: "white", border: "1px solid #dbeafe", borderRadius: 12, padding: 16, boxShadow: "0 2px 4px rgba(0,0,0,0.05)", width: "100%" };
-const table = { width: "100%", borderCollapse: "collapse" };
-const alertBox = { background: "#fee2e2", color: "#991b1b", border: "1px solid #fecaca", padding: 10, borderRadius: 8, marginBottom: 8 };
-const input = { padding: 10, borderRadius: 8, border: "1px solid #cbd5e1", outline: "none" };
-const buttonBlue = { padding: "10px 14px", borderRadius: 8, border: "none", background: "#1d4ed8", color: "white", cursor: "pointer" };
-const buttonGray = { padding: "10px 14px", borderRadius: 8, border: "1px solid #d1d5db", background: "#f3f4f6", color: "#111827", cursor: "pointer" };
-const buttonGhost = { padding: "6px 10px", borderRadius: 8, border: "1px solid #e5e7eb", background: "white", color: "#111827", cursor: "pointer" };
-
-const backdrop = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(0,0,0,0.5)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: 16,
-  zIndex: 9999
-};
-const modal = {
-  background: "white",
-  borderRadius: 12,
-  border: "1px solid #e5e7eb",
-  width: "min(820px, 100%)",
-  padding: 16,
-  boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
-  zIndex: 10000
-};
-const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 };
-const dropdown = { position: "absolute", top: "100%", left: 0, right: 0, background: "white", border: "1px solid #e2e8f0", borderRadius: 10, boxShadow: "0 10px 20px rgba(0,0,0,.08)", marginTop: 6, maxHeight: 240, overflowY: "auto", zIndex: 50 };
-const sugItem = { padding: "10px 12px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, cursor: "pointer" };
+const inputCls =
+  "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 outline-none focus:border-sapphire-400 focus:ring-2 focus:ring-sapphire-400/40";
