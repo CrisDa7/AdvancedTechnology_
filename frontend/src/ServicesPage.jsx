@@ -1,10 +1,40 @@
 import { useEffect, useMemo, useState } from "react";
+import ChatWidgetAdmin from "./components/ChatWidgetAdmin"; // ajusta si tu ruta es distinta
+
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
-export default function ServicesPage({ token }) {
+export default function ServicesPage({ token: tokenProp }) {
+  // fallback por si no llega por props
+  const token = tokenProp ?? localStorage.getItem("token") ?? "";
+
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  // ====== Filtros (como Productos) ======
+  const [qNombre, setQNombre] = useState("");
+  const [qCodigo, setQCodigo] = useState("");
+  const [filters, setFilters] = useState({ nombre: "", codigo: "" });
+
+  const applyFilters = () => setFilters({
+    nombre: qNombre.trim(),
+    codigo: qCodigo.trim()
+  });
+  const clearFilters = () => {
+    setQNombre("");
+    setQCodigo("");
+    setFilters({ nombre: "", codigo: "" });
+  };
+
+  const filteredItems = useMemo(() => {
+    const nom = filters.nombre.toLowerCase();
+    const cod = filters.codigo.toLowerCase();
+    return items.filter((s) => {
+      const okNombre = !nom || (s.nombre_completo || "").toLowerCase().includes(nom);
+      const okCodigo = !cod || (s.codigo || "").toLowerCase().startsWith(cod);
+      return okNombre && okCodigo;
+    });
+  }, [items, filters]);
 
   // Crear
   const [openCreate, setOpenCreate] = useState(false);
@@ -20,7 +50,7 @@ export default function ServicesPage({ token }) {
 
   // Detalle
   const [detailOpen, setDetailOpen] = useState(false);
-  const [detail, setDetail] = useState(null); // servicio completo
+  const [detail, setDetail] = useState(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
 
   // Editar
@@ -42,7 +72,7 @@ export default function ServicesPage({ token }) {
   const [estadoSaving, setEstadoSaving] = useState(false);
   const estados = ["pendiente", "en proceso", "terminado", "entregado"];
 
-  // Comentario
+  // Comentario (modal rápido)
   const [commentOpen, setCommentOpen] = useState(false);
   const [commentTarget, setCommentTarget] = useState(null);
   const [comentario, setComentario] = useState("");
@@ -175,7 +205,6 @@ export default function ServicesPage({ token }) {
       if (!res.ok) throw new Error(data?.error || "No se pudo obtener el servicio");
       setDetail(data);
     } catch (e) {
-      // Fallback: si falla, intenta mostrar de la lista
       const fallback = items.find(x => x.id === id) || null;
       setDetail(fallback);
     } finally {
@@ -303,7 +332,6 @@ export default function ServicesPage({ token }) {
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body?.error || "No se pudo enviar el comentario");
-      // Si el backend devuelve el servicio actualizado (ej. ultimo_comentario), actualizamos:
       if (body?.servicio) {
         setItems(list => list.map(x => x.id === body.servicio.id ? body.servicio : x));
       }
@@ -348,7 +376,45 @@ export default function ServicesPage({ token }) {
           </div>
         </div>
 
-        {/* Listado (solo columnas pedidas) */}
+        {/* Gestión de servicios (BUSCADOR como en Productos) */}
+        <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-glass">
+          <h3 className="mb-3 text-base font-semibold text-sapphire-900">Gestión de servicios</h3>
+          <form
+            onSubmit={(e) => { e.preventDefault(); applyFilters(); }}
+            className="grid gap-3 md:grid-cols-2 lg:grid-cols-3 items-end"
+          >
+            <Field label="Nombre">
+              <input
+                value={qNombre}
+                onChange={(e) => setQNombre(e.target.value)}
+                placeholder="Ej: Maite Equinosa"
+                className={inputCls}
+              />
+            </Field>
+            <Field label="Código">
+              <input
+                value={qCodigo}
+                onChange={(e) => setQCodigo(e.target.value)}
+                placeholder="Empieza por…"
+                className={inputCls}
+              />
+            </Field>
+            <div className="flex gap-2">
+              <button type="submit" className="rounded-lg bg-sapphire-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sapphire-700">
+                Aplicar filtros
+              </button>
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+              >
+                Limpiar
+              </button>
+            </div>
+          </form>
+        </div>
+
+        {/* Listado */}
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-glass">
           <h3 className="mb-3 text-base font-semibold text-sapphire-900">Listado</h3>
 
@@ -360,7 +426,7 @@ export default function ServicesPage({ token }) {
 
           {loading ? (
             <p className="text-slate-600">Cargando...</p>
-          ) : items.length === 0 ? (
+          ) : filteredItems.length === 0 ? (
             <p className="text-slate-600">No hay servicios.</p>
           ) : (
             <div className="overflow-x-auto">
@@ -375,7 +441,7 @@ export default function ServicesPage({ token }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {items.map((s) => (
+                  {filteredItems.map((s) => (
                     <tr key={s.id} className="border-t border-slate-200 hover:bg-slate-50">
                       <Td className="font-medium">{s.nombre_completo}</Td>
                       <Td>${Number(s.valor_total).toFixed(2)}</Td>
@@ -401,8 +467,11 @@ export default function ServicesPage({ token }) {
                           >
                             Estado
                           </button>
+                          {/* Reemplaza el onClick si quieres forzar uso del chat flotante */}
                           <button
-                            onClick={() => openCommentFor(s)}
+                            onClick={() =>
+                              alert("Abre el chat flotante (abajo a la derecha) y busca este servicio por código/cliente.")
+                            }
                             className="rounded-md border border-green-300 bg-green-100 px-3 py-1 text-xs font-semibold text-green-800 hover:bg-green-200"
                           >
                             Comentario
@@ -648,7 +717,7 @@ export default function ServicesPage({ token }) {
           </Modal>
         )}
 
-        {/* MODAL: Comentario al cliente */}
+        {/* MODAL: Comentario rápido */}
         {commentOpen && commentTarget && (
           <Modal onClose={() => setCommentOpen(false)} title={`Mensaje para: ${commentTarget.nombre_completo}`}>
             <form onSubmit={submitComment} className="grid gap-3">
@@ -670,6 +739,9 @@ export default function ServicesPage({ token }) {
           </Modal>
         )}
       </div>
+
+      {/* Chat flotante */}
+      {token && <ChatWidgetAdmin token={token} />}
     </div>
   );
 }

@@ -3,24 +3,27 @@ import { useEffect, useMemo, useState } from "react";
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
 export default function SalesPage({ token }) {
-  // Listado de órdenes
+  // ===== Listado de órdenes =====
   const [ordenes, setOrdenes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // Búsqueda por nombre de cliente (filtrado local)
-  const [buscarNombre, setBuscarNombre] = useState("");
+  // ===== Filtros (mismo patrón UI que otras páginas) =====
+  // Borrador en inputs:
+  const [fNombre, setFNombre] = useState("");
+  // Filtros aplicados (los que realmente usa la tabla):
+  const [qNombre, setQNombre] = useState("");
 
-  // Modal crear
+  // ===== Modal crear =====
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  // Detalle (ver items de una orden)
+  // ===== Detalle (ver items de una orden) =====
   const [detailOpen, setDetailOpen] = useState(false);
   const [detail, setDetail] = useState(null); // {orden, items}
   const [loadingDetail, setLoadingDetail] = useState(false);
 
-  // Datos del cliente + nota
+  // ===== Datos del cliente + nota =====
   const [form, setForm] = useState({
     cliente_nombre: "",
     cedula: "",
@@ -28,15 +31,16 @@ export default function SalesPage({ token }) {
     descripcion: "",
   });
 
-  // Buscador y líneas (carrito)
+  // ===== Buscador de productos y líneas (carrito) =====
   const [q, setQ] = useState("");
   const [suggestions, setSuggestions] = useState([]);
   const [fetchingSug, setFetchingSug] = useState(false);
   const debouncedQ = useDebounce(q, 300);
 
-  const [lineas, setLineas] = useState([]); // {id,codigo,nombre,precio_sugerido,cantidad,precio_unitario?}
+  // Cada línea: {id,codigo,nombre,precio_sugerido,cantidad,precio_unitario?}
+  const [lineas, setLineas] = useState([]);
 
-  // Validaciones
+  // ===== Validaciones =====
   const rules = useMemo(
     () => ({
       nombre: /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ ]+$/,
@@ -56,15 +60,14 @@ export default function SalesPage({ token }) {
     if (!rules.telefono.test(form.telefono)) e.telefono = "Teléfono: 10 dígitos";
     if (!lineas.length) e.lineas = "Agrega al menos un producto";
     for (const ln of lineas) {
-      if (!rules.enteroPos(String(ln.cantidad)))
-        return { cantidad: "Cantidad ≥ 1 (entero)" };
+      if (!rules.enteroPos(String(ln.cantidad))) return { cantidad: "Cantidad ≥ 1 (entero)" };
       if (!rules.precio(String(ln.precio_unitario ?? "")))
         return { precio_unitario: "Precio inválido (máx 2 decimales)" };
     }
     return e;
   };
 
-  // ====== Cargar órdenes ======
+  // ===== Data: cargar órdenes =====
   const fetchOrdenes = async () => {
     try {
       setLoading(true);
@@ -81,17 +84,13 @@ export default function SalesPage({ token }) {
       setLoading(false);
     }
   };
-  useEffect(() => {
-    if (token) fetchOrdenes();
-  }, [token]);
 
-  // ====== Buscar productos (código o nombre) ======
+  useEffect(() => { if (token) fetchOrdenes(); }, [token]);
+
+  // ===== Autocomplete de productos (código o nombre) =====
   useEffect(() => {
     (async () => {
-      if (!debouncedQ) {
-        setSuggestions([]);
-        return;
-      }
+      if (!debouncedQ) { setSuggestions([]); return; }
       try {
         setFetchingSug(true);
         const res = await fetch(
@@ -106,6 +105,7 @@ export default function SalesPage({ token }) {
     })();
   }, [debouncedQ, token]);
 
+  // Añadir producto a las líneas
   const pickProduct = (p) => {
     setLineas((arr) => {
       const i = arr.findIndex((x) => x.id === p.id);
@@ -116,13 +116,7 @@ export default function SalesPage({ token }) {
       }
       return [
         ...arr,
-        {
-          id: p.id,
-          codigo: p.codigo,
-          nombre: p.nombre,
-          precio_sugerido: Number(p.precio_venta) || 0,
-          cantidad: 1,
-        },
+        { id: p.id, codigo: p.codigo, nombre: p.nombre, precio_sugerido: Number(p.precio_venta) || 0, cantidad: 1 },
       ];
     });
     setQ("");
@@ -134,13 +128,15 @@ export default function SalesPage({ token }) {
 
   const removeLinea = (idx) => setLineas((arr) => arr.filter((_, i) => i !== idx));
 
-  const totalPreview = lineas.reduce((acc, ln) => {
-    const pu =
-      ln.precio_unitario === "" || ln.precio_unitario == null
+  // Total previo calculado (usa precio sugerido si no especificas uno)
+  const totalPreview = useMemo(() => (
+    lineas.reduce((acc, ln) => {
+      const pu = ln.precio_unitario === "" || ln.precio_unitario == null
         ? ln.precio_sugerido
         : Number(ln.precio_unitario);
-    return acc + pu * Number(ln.cantidad || 0);
-  }, 0);
+      return acc + pu * Number(ln.cantidad || 0);
+    }, 0)
+  ), [lineas]);
 
   const onChangeForm = (e) => {
     const { name, value } = e.target;
@@ -149,7 +145,7 @@ export default function SalesPage({ token }) {
     setForm((f) => ({ ...f, [name]: value }));
   };
 
-  // ====== Crear orden ======
+  // ===== Crear orden =====
   const submit = async (e) => {
     e.preventDefault();
     const errs = validate();
@@ -165,10 +161,7 @@ export default function SalesPage({ token }) {
         telefono: form.telefono,
         descripcion: form.descripcion || undefined,
         items: lineas.map((ln) => {
-          const item = {
-            producto_id: Number(ln.id),
-            cantidad: Number(ln.cantidad),
-          };
+          const item = { producto_id: Number(ln.id), cantidad: Number(ln.cantidad) };
           if (ln.precio_unitario !== "" && ln.precio_unitario != null) {
             item.precio_unitario = Number(ln.precio_unitario);
           }
@@ -178,19 +171,16 @@ export default function SalesPage({ token }) {
 
       const res = await fetch(`${API}/api/ordenes`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(payload),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body?.error || "Error al crear orden");
 
-      // prepend la nueva orden al listado
+      // Prepend nueva orden
       setOrdenes((v) => [body.orden, ...v]);
 
-      // limpiar modal
+      // Limpiar modal
       setLineas([]);
       setForm({ cliente_nombre: "", cedula: "", telefono: "", descripcion: "" });
       setOpen(false);
@@ -201,7 +191,7 @@ export default function SalesPage({ token }) {
     }
   };
 
-  // ====== Ver detalle ======
+  // ===== Ver detalle =====
   const openDetailFor = async (id) => {
     try {
       setLoadingDetail(true);
@@ -212,21 +202,23 @@ export default function SalesPage({ token }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "No se pudo obtener la orden");
       setDetail(data);
-    } catch (e) {
+    } catch {
       setDetail(null);
     } finally {
       setLoadingDetail(false);
     }
   };
 
-  // ====== Filtrado por nombre (local) ======
+  // ===== Aplicar/Limpiar filtros (coincide con otras páginas) =====
+  const aplicarFiltros = () => setQNombre(fNombre.trim());
+  const limpiarFiltros = () => { setFNombre(""); setQNombre(""); };
+
+  // Filtrado local por nombre (usa qNombre aplicado)
   const ordenesFiltradas = useMemo(() => {
-    const term = buscarNombre.trim().toLowerCase();
+    const term = qNombre.toLowerCase();
     if (!term) return ordenes;
-    return ordenes.filter((o) =>
-      String(o.cliente_nombre || "").toLowerCase().includes(term)
-    );
-  }, [ordenes, buscarNombre]);
+    return ordenes.filter((o) => String(o.cliente_nombre || "").toLowerCase().includes(term));
+  }, [ordenes, qNombre]);
 
   if (!token) {
     return (
@@ -252,10 +244,7 @@ export default function SalesPage({ token }) {
               Refrescar
             </button>
             <button
-              onClick={() => {
-                setError("");
-                setOpen(true);
-              }}
+              onClick={() => { setError(""); setOpen(true); }}
               className="rounded-lg bg-sapphire-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sapphire-700 active:translate-y-px"
             >
               Agregar venta
@@ -263,40 +252,41 @@ export default function SalesPage({ token }) {
           </div>
         </div>
 
-        {/* Búsqueda por nombre de cliente */}
+        {/* Gestión de ventas (buscador consistente) */}
         <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-glass">
-          <h3 className="mb-3 text-base font-semibold text-sapphire-900">
-            Buscar órdenes por cliente
-          </h3>
+          <h3 className="mb-3 text-base font-semibold text-sapphire-900">Gestión de ventas</h3>
           <div className="grid grid-cols-1 gap-3 md:max-w-xl">
             <Field label="Nombre del cliente">
               <input
-                value={buscarNombre}
-                onChange={(e) => setBuscarNombre(e.target.value)}
-                placeholder="Ej: Ana, Juan Pérez..."
+                value={fNombre}
+                onChange={(e) => setFNombre(e.target.value)}
+                placeholder="Ej: Ana, Juan Pérez…"
                 className={inputCls}
               />
             </Field>
           </div>
-
-          {/* Botón LIMPIAR */}
-          <div className="mt-3">
+          <div className="mt-3 flex gap-2">
             <button
-              onClick={() => setBuscarNombre("")}
+              onClick={aplicarFiltros}
+              className="rounded-lg bg-sapphire-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sapphire-700"
+            >
+              Aplicar filtros
+            </button>
+            <button
+              onClick={limpiarFiltros}
               className="rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-200"
             >
               Limpiar
             </button>
           </div>
-
-          {buscarNombre.trim() && (
+          {qNombre && (
             <div className="mt-2 text-xs text-slate-600">
-              Mostrando resultados para <b>{buscarNombre.trim()}</b>
+              Mostrando resultados para <b>{qNombre}</b>
             </div>
           )}
         </div>
 
-        {/* Listado de órdenes (solo columnas: Cliente, Total, Estado, Acciones) */}
+        {/* Listado (Cliente, Total, Estado, Acciones) */}
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-glass">
           <h3 className="mb-3 text-base font-semibold text-sapphire-900">Órdenes recientes</h3>
 
@@ -356,20 +346,10 @@ export default function SalesPage({ token }) {
         {/* MODAL: crear orden */}
         {open && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
-            <div
-              role="dialog"
-              aria-modal="true"
-              className="w-full max-w-5xl rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl"
-            >
+            <div role="dialog" aria-modal="true" className="w-full max-w-5xl rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl">
               <div className="mb-2 flex items-center justify-between">
                 <h3 className="text-lg font-semibold text-slate-900">Agregar venta</h3>
-                <button
-                  onClick={() => setOpen(false)}
-                  className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 hover:bg-slate-50"
-                  aria-label="Cerrar"
-                >
-                  ✕
-                </button>
+                <button onClick={() => setOpen(false)} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 hover:bg-slate-50" aria-label="Cerrar">✕</button>
               </div>
 
               {error && (
@@ -382,51 +362,25 @@ export default function SalesPage({ token }) {
                 {/* Datos del cliente */}
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                   <Field label="Nombre del cliente" htmlFor="cliente_nombre">
-                    <input
-                      id="cliente_nombre"
-                      name="cliente_nombre"
-                      value={form.cliente_nombre}
-                      onChange={onChangeForm}
-                      className={inputCls}
-                    />
+                    <input id="cliente_nombre" name="cliente_nombre" value={form.cliente_nombre} onChange={onChangeForm} className={inputCls} />
                   </Field>
                   <Field label="Cédula (10 dígitos)" htmlFor="cedula">
-                    <input
-                      id="cedula"
-                      name="cedula"
-                      value={form.cedula}
-                      onChange={onChangeForm}
-                      className={inputCls}
-                    />
+                    <input id="cedula" name="cedula" value={form.cedula} onChange={onChangeForm} className={inputCls} />
                   </Field>
                   <Field label="Teléfono (10 dígitos)" htmlFor="telefono">
-                    <input
-                      id="telefono"
-                      name="telefono"
-                      value={form.telefono}
-                      onChange={onChangeForm}
-                      className={inputCls}
-                    />
+                    <input id="telefono" name="telefono" value={form.telefono} onChange={onChangeForm} className={inputCls} />
                   </Field>
                 </div>
 
                 {/* Buscador de productos */}
                 <div className="relative">
                   <Field label="Producto (código o nombre)" htmlFor="producto_search">
-                    <input
-                      id="producto_search"
-                      value={q}
-                      onChange={(e) => setQ(e.target.value)}
-                      placeholder="Ej: PR0001, Mouse"
-                      className={inputCls}
-                    />
+                    <input id="producto_search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ej: PR0001, Mouse" className={inputCls} onKeyDown={(e)=>{ if(e.key==='Escape') setSuggestions([]); }} />
                   </Field>
 
                   {(suggestions.length > 0 || fetchingSug) && (
                     <div className="absolute left-0 right-0 z-50 mt-2 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl">
-                      {fetchingSug && (
-                        <div className="px-3 py-2 text-sm text-slate-600">Buscando...</div>
-                      )}
+                      {fetchingSug && <div className="px-3 py-2 text-sm text-slate-600">Buscando...</div>}
                       {suggestions.map((s) => (
                         <button
                           type="button"
@@ -434,12 +388,8 @@ export default function SalesPage({ token }) {
                           onClick={() => pickProduct(s)}
                           className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-slate-50"
                         >
-                          <div>
-                            <b>{s.codigo}</b> — {s.nombre}
-                          </div>
-                          <small className="text-slate-600">
-                            ${Number(s.precio_venta).toFixed(2)}
-                          </small>
+                          <div><b>{s.codigo}</b> — {s.nombre}</div>
+                          <small className="text-slate-600">${Number(s.precio_venta).toFixed(2)}</small>
                         </button>
                       ))}
                     </div>
@@ -448,9 +398,7 @@ export default function SalesPage({ token }) {
 
                 {/* Líneas seleccionadas */}
                 <div className="rounded-2xl border border-slate-200 bg-white p-3">
-                  <h4 className="mb-3 text-sm font-semibold text-sapphire-900">
-                    Productos seleccionados
-                  </h4>
+                  <h4 className="mb-3 text-sm font-semibold text-sapphire-900">Productos seleccionados</h4>
                   {lineas.length === 0 ? (
                     <p className="text-sm text-slate-600">Aún no has agregado productos.</p>
                   ) : (
@@ -467,32 +415,21 @@ export default function SalesPage({ token }) {
                         </thead>
                         <tbody>
                           {lineas.map((ln, idx) => {
-                            const pu =
-                              ln.precio_unitario === "" || ln.precio_unitario == null
-                                ? ln.precio_sugerido
-                                : Number(ln.precio_unitario);
+                            const pu = ln.precio_unitario === "" || ln.precio_unitario == null ? ln.precio_sugerido : Number(ln.precio_unitario);
                             const sub = pu * Number(ln.cantidad || 0);
                             return (
                               <tr key={ln.id} className="border-b border-slate-100">
                                 <Td>
                                   <div className="flex flex-col">
-                                    <span className="font-medium">
-                                      {ln.codigo} — {ln.nombre}
-                                    </span>
-                                    <small className="text-slate-500">
-                                      Precio sugerido: ${ln.precio_sugerido.toFixed(2)}
-                                    </small>
+                                    <span className="font-medium">{ln.codigo} — {ln.nombre}</span>
+                                    <small className="text-slate-500">Precio sugerido: ${ln.precio_sugerido.toFixed(2)}</small>
                                   </div>
                                 </Td>
                                 <Td>
                                   <input
                                     className={inputCls}
                                     value={ln.cantidad}
-                                    onChange={(e) =>
-                                      updateLinea(idx, {
-                                        cantidad: e.target.value.replace(/\D/g, ""),
-                                      })
-                                    }
+                                    onChange={(e) => updateLinea(idx, { cantidad: e.target.value.replace(/\D/g, "") })}
                                   />
                                 </Td>
                                 <Td>
@@ -500,20 +437,12 @@ export default function SalesPage({ token }) {
                                     className={inputCls}
                                     placeholder="Auto"
                                     value={ln.precio_unitario ?? ""}
-                                    onChange={(e) =>
-                                      updateLinea(idx, {
-                                        precio_unitario: e.target.value.replace(/[^0-9.]/g, ""),
-                                      })
-                                    }
+                                    onChange={(e) => updateLinea(idx, { precio_unitario: e.target.value.replace(/[^0-9.]/g, "") })}
                                   />
                                 </Td>
                                 <Td>${sub.toFixed(2)}</Td>
                                 <Td>
-                                  <button
-                                    type="button"
-                                    onClick={() => removeLinea(idx)}
-                                    className="rounded-md border border-slate-300 bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-800 hover:bg-slate-200"
-                                  >
+                                  <button type="button" onClick={() => removeLinea(idx)} className="rounded-md border border-slate-300 bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-800 hover:bg-slate-200">
                                     Quitar
                                   </button>
                                 </Td>
@@ -529,31 +458,19 @@ export default function SalesPage({ token }) {
                   <div className="mt-3 flex items-center justify-end">
                     <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-right">
                       <div className="text-xs text-slate-600">Total</div>
-                      <div className="text-lg font-bold text-sapphire-900">
-                        ${totalPreview.toFixed(2)}
-                      </div>
+                      <div className="text-lg font-bold text-sapphire-900">${totalPreview.toFixed(2)}</div>
                     </div>
                   </div>
                 </div>
 
                 <Field label="Nota / Descripción" htmlFor="descripcion">
-                  <textarea
-                    id="descripcion"
-                    name="descripcion"
-                    value={form.descripcion}
-                    onChange={onChangeForm}
-                    className={`${inputCls} min-h-[80px]`}
-                  />
+                  <textarea id="descripcion" name="descripcion" value={form.descripcion} onChange={onChangeForm} className={`${inputCls} min-h-[80px]`} />
                 </Field>
 
                 <div className="mt-2 flex items-center justify-end gap-2">
                   <button
                     type="button"
-                    onClick={() => {
-                      setOpen(false);
-                      setLineas([]);
-                      setError("");
-                    }}
+                    onClick={() => { setOpen(false); setLineas([]); setError(""); }}
                     className="rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-200"
                   >
                     Cancelar
@@ -577,15 +494,7 @@ export default function SalesPage({ token }) {
             <div className="w-full max-w-3xl rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl">
               <div className="mb-2 flex items-center justify-between">
                 <h3 className="text-lg font-semibold text-slate-900">Detalle de orden</h3>
-                <button
-                  onClick={() => {
-                    setDetailOpen(false);
-                    setDetail(null);
-                  }}
-                  className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 hover:bg-slate-50"
-                >
-                  ✕
-                </button>
+                <button onClick={() => { setDetailOpen(false); setDetail(null); }} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 hover:bg-slate-50">✕</button>
               </div>
 
               {loadingDetail ? (
@@ -597,21 +506,13 @@ export default function SalesPage({ token }) {
                   <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-2">
                     <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
                       <div className="text-xs text-slate-600">Cliente</div>
-                      <div className="font-semibold text-sapphire-900">
-                        {detail.orden.cliente_nombre}
-                      </div>
-                      <div className="text-xs text-slate-600">
-                        CI: {detail.orden.cedula} • Tel: {detail.orden.telefono}
-                      </div>
+                      <div className="font-semibold text-sapphire-900">{detail.orden.cliente_nombre}</div>
+                      <div className="text-xs text-slate-600">CI: {detail.orden.cedula} • Tel: {detail.orden.telefono}</div>
                     </div>
                     <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-right">
                       <div className="text-xs text-slate-600">Total</div>
-                      <div className="text-lg font-bold text-sapphire-900">
-                        ${Number(detail.orden.total).toFixed(2)}
-                      </div>
-                      <div className="text-xs text-slate-600">
-                        {new Date(detail.orden.fecha_venta).toLocaleString()}
-                      </div>
+                      <div className="text-lg font-bold text-sapphire-900">${Number(detail.orden.total).toFixed(2)}</div>
+                      <div className="text-xs text-slate-600">{new Date(detail.orden.fecha_venta).toLocaleString()}</div>
                     </div>
                   </div>
 
@@ -641,8 +542,7 @@ export default function SalesPage({ token }) {
                     </div>
                     {detail.orden.descripcion && (
                       <div className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
-                        <span className="font-semibold">Nota: </span>
-                        {detail.orden.descripcion}
+                        <span className="font-semibold">Nota: </span>{detail.orden.descripcion}
                       </div>
                     )}
                   </div>
@@ -657,7 +557,6 @@ export default function SalesPage({ token }) {
 }
 
 /* ---------- Helpers ---------- */
-
 function Field({ label, htmlFor, children }) {
   return (
     <label htmlFor={htmlFor} className="flex flex-col gap-1 text-sm text-slate-700">
@@ -666,23 +565,11 @@ function Field({ label, htmlFor, children }) {
     </label>
   );
 }
-
-function Th({ children, className = "" }) {
-  return <th className={`px-3 py-2 ${className}`}>{children}</th>;
-}
-
-function Td({ children, className = "" }) {
-  return <td className={`px-3 py-2 ${className}`}>{children}</td>;
-}
-
+function Th({ children, className = "" }) { return <th className={`px-3 py-2 ${className}`}>{children}</th>; }
+function Td({ children, className = "" }) { return <td className={`px-3 py-2 ${className}`}>{children}</td>; }
 function useDebounce(value, ms = 300) {
   const [v, setV] = useState(value);
-  useEffect(() => {
-    const t = setTimeout(() => setV(value), ms);
-    return () => clearTimeout(t);
-  }, [value, ms]);
+  useEffect(() => { const t = setTimeout(() => setV(value), ms); return () => clearTimeout(t); }, [value, ms]);
   return v;
 }
-
-const inputCls =
-  "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 outline-none focus:border-sapphire-400 focus:ring-2 focus:ring-sapphire-400/40";
+const inputCls = "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 outline-none focus:border-sapphire-400 focus:ring-2 focus:ring-sapphire-400/40";

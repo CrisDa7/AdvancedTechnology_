@@ -1167,6 +1167,219 @@ app.get('/api/reportes/inventario-valor', auth, requireRole('administrador','emp
     res.status(500).json({ ok:false, error:'Error en valor de inventario' });
   }
 });
+// ===================== Conversaciones (listado / borrar) =====================
+
+// Admin/Empleado: lista "conversaciones" (servicios) con último mensaje
+app.get('/api/conversaciones', auth, requireRole('administrador','empleado'), async (req, res) => {
+  try {
+    const { q } = req.query; // filtro opcional por nombre/código/usuario/equipo/modelo
+    const vals = [];
+    let where = '';
+    if (q && String(q).trim() !== '') {
+      vals.push(`%${q.trim()}%`);
+      where = `
+        WHERE s.nombre_completo ILIKE $1
+           OR s.usuario ILIKE $1
+           OR s.codigo ILIKE $1
+           OR s.tipo_equipo ILIKE $1
+           OR s.modelo ILIKE $1
+      `;
+    }
+
+    const { rows } = await pool.query(
+      `
+      SELECT
+        s.id, s.codigo, s.nombre_completo, s.usuario, s.tipo_equipo, s.modelo,
+        s.estado, s.fecha_recepcion,
+        (
+          SELECT sc.mensaje FROM servicio_comentarios sc
+          WHERE sc.servicio_id = s.id
+          ORDER BY sc.created_at DESC
+          LIMIT 1
+        ) AS ultimo_mensaje,
+        (
+          SELECT sc.created_at FROM servicio_comentarios sc
+          WHERE sc.servicio_id = s.id
+          ORDER BY sc.created_at DESC
+          LIMIT 1
+        ) AS ultimo_fecha
+      FROM servicios s
+      ${where}
+      ORDER BY (ultimo_fecha IS NULL), ultimo_fecha DESC, s.fecha_recepcion DESC
+      LIMIT 200
+      `,
+      vals
+    );
+    res.json(rows);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:'Error listando conversaciones' });
+  }
+});
+
+// Cliente: borrar su "conversación" (sus mensajes) de un servicio
+app.delete('/api/servicios/:id/comentarios', auth, requireRole('cliente','administrador','empleado'), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ ok:false, error:'ID inválido' });
+
+    const chk = await canAccessService(req, id);
+    if (!chk.ok) return res.status(chk.code).json({ ok:false, error: chk.error });
+
+    // admin/empleado puede borrar todo si ?all=1
+    if (req.user.rol !== 'cliente' && req.query.all === '1') {
+      const { rowCount } = await pool.query(
+        'DELETE FROM servicio_comentarios WHERE servicio_id = $1', [id]
+      );
+      return res.json({ ok:true, borrados: rowCount });
+    }
+
+    // cliente: borra solo sus propios mensajes
+    const { rowCount } = await pool.query(
+      `DELETE FROM servicio_comentarios
+       WHERE servicio_id = $1 AND autor_tipo = $2`,
+      [id, 'cliente']
+    );
+    res.json({ ok:true, borrados: rowCount });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:'Error borrando conversación' });
+  }
+});
+
+// Admin/Empleado: borrar un mensaje puntual
+app.delete('/api/servicios/:id/comentarios/:cid', auth, requireRole('administrador','empleado'), async (req, res) => {
+  try {
+    const id  = Number(req.params.id);
+    const cid = Number(req.params.cid);
+    if (!Number.isInteger(id) || id <= 0)  return res.status(400).json({ ok:false, error:'ID inválido' });
+    if (!Number.isInteger(cid) || cid <= 0) return res.status(400).json({ ok:false, error:'Comentario inválido' });
+
+    const chk = await canAccessService(req, id);
+    if (!chk.ok) return res.status(chk.code).json({ ok:false, error: chk.error });
+
+    const { rowCount } = await pool.query(
+      'DELETE FROM servicio_comentarios WHERE id=$1 AND servicio_id=$2',
+      [cid, id]
+    );
+    if (!rowCount) return res.status(404).json({ ok:false, error:'Comentario no encontrado' });
+    res.json({ ok:true, id: cid });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:'Error borrando comentario' });
+  }
+});
+/* ========= SSE (Server-Sent Events) para chat ========= */
+const sseClients = new Map(); // servicioId -> Set(res)
+
+function sseSubscribe(servicioId, res) {
+  if (!sseClients.has(servicioId)) sseClients.set(servicioId, new Set());
+  sseClients.get(servicioId).add(res);
+}
+
+function sseUnsubscribe(servicioId, res) {
+  const set = sseClients.get(servicioId);
+  if (!set) return;
+  set.delete(res);
+  if (set.size === 0) sseClients.delete(servicioId);
+}
+
+function sseBroadcast(servicioId, payload) {
+  const set = sseClients.get(servicioId);
+  if (!set) return;
+  const data = `event: comentario\ndata: ${JSON.stringify(payload)}\n\n`;
+  for (const res of set) {
+    try { res.write(data); } catch {}
+  }
+}
+
+// helper para verificar token desde query (?token=) o header
+function authFromQueryOrHeader(req) {
+    let token = null;
+    const h = req.headers.authorization || '';
+    if (h.startsWith('Bearer ')) token = h.slice(7);
+    if (!token && req.query.token) token = String(req.query.token);
+    if (!token) throw new Error('No token');
+    const data = jwt.verify(token, process.env.JWT_SECRET || 'dev_secret');
+    return data;
+}
+
+// Stream SSE de comentarios de un servicio
+app.get('/api/servicios/:id/stream', async (req, res) => {
+  try {
+    // auth por query o header (SSE no permite headers custom fácilmente)
+    const user = authFromQueryOrHeader(req);
+    req.user = user;
+
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).end();
+
+    // validar acceso (admin/empleado/ese cliente)
+    const chk = await canAccessService(req, id);
+    if (!chk.ok) return res.status(chk.code).end();
+
+    // cabeceras SSE
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    // si tu CORS solo permite 5173:
+    res.setHeader('Access-Control-Allow-Origin', 'http://localhost:5173');
+
+    // suscribir
+    sseSubscribe(id, res);
+
+    // primer ping (útil para que el cliente sepa que está conectado)
+    res.write(`event: ready\ndata: ${JSON.stringify({ ok: true, serviceId: id })}\n\n`);
+
+    // heartbeat cada 25s para mantener viva la conexión en proxies
+    const hb = setInterval(() => {
+      try { res.write(`event: hb\ndata: 1\n\n`); } catch {}
+    }, 25000);
+
+    // al cerrar
+    req.on('close', () => {
+      clearInterval(hb);
+      sseUnsubscribe(id, res);
+      try { res.end(); } catch {}
+    });
+  } catch (e) {
+    // token inválido o cualquier otro error
+    try { res.status(401).end(); } catch {}
+  }
+});
+app.post('/api/servicios/:id/comentarios',
+  auth, requireRole('administrador','empleado','cliente'),
+  async (req,res) => {
+    try {
+      const id = Number(req.params.id);
+      const { mensaje } = req.body;
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ ok:false, error:'ID inválido' });
+      if (!mensaje || !mensaje.trim()) return res.status(400).json({ ok:false, error:'Mensaje vacío' });
+
+      const chk = await canAccessService(req, id);
+      if (!chk.ok) return res.status(chk.code).json({ ok:false, error: chk.error });
+
+      const autor_tipo = req.user.rol;
+      const autor_usuario = await getUsuarioFromToken(req);
+
+      const { rows } = await pool.query(
+        `INSERT INTO servicio_comentarios (servicio_id, autor_tipo, autor_usuario, mensaje)
+         VALUES ($1,$2,$3,$4)
+         RETURNING id, servicio_id, autor_tipo, autor_usuario, mensaje, created_at`,
+        [id, autor_tipo, autor_usuario, mensaje.trim()]
+      );
+      const created = rows[0];
+
+      // >>> Notificar a clientes SSE conectados a este servicio:
+      sseBroadcast(id, created);
+
+      res.status(201).json(created);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok:false, error:'Error creando comentario' });
+    }
+  }
+);
 
 /* =========================================================
    Arranque

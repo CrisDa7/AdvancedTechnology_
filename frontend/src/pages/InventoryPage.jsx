@@ -1,12 +1,35 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
 export default function InventoryPage({ token }) {
   const [items, setItems] = useState([]);
-  const [q, setQ] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  // ====== Filtros (Nombre + Código) ======
+  const [qNombre, setQNombre] = useState("");
+  const [qCodigo, setQCodigo] = useState("");
+  const [filters, setFilters] = useState({ nombre: "", codigo: "" });
+
+  const applyFilters = () =>
+    setFilters({ nombre: qNombre.trim(), codigo: qCodigo.trim() });
+
+  const clearFilters = () => {
+    setQNombre("");
+    setQCodigo("");
+    setFilters({ nombre: "", codigo: "" });
+  };
+
+  const filteredItems = useMemo(() => {
+    const nom = filters.nombre.toLowerCase();
+    const cod = filters.codigo.toLowerCase();
+    return items.filter((p) => {
+      const okNombre = !nom || (p.nombre || "").toLowerCase().includes(nom);
+      const okCodigo = !cod || (p.codigo || "").toLowerCase().startsWith(cod);
+      return okNombre && okCodigo;
+    });
+  }, [items, filters]);
 
   const [showAdj, setShowAdj] = useState(false);
   const [showKdx, setShowKdx] = useState(false);
@@ -34,7 +57,9 @@ export default function InventoryPage({ token }) {
     }
   };
 
-  useEffect(() => { if (token) fetchAll(); }, [token]);
+  useEffect(() => {
+    if (token) fetchAll();
+  }, [token]);
 
   const openAdjust = (prod) => {
     setCurrent(prod);
@@ -64,7 +89,8 @@ export default function InventoryPage({ token }) {
   const submitAdjust = async (e) => {
     e.preventDefault();
     const cantidad = Number(form.cantidad);
-    if (!Number.isInteger(cantidad) || cantidad <= 0) return setError("Cantidad inválida");
+    if (!Number.isInteger(cantidad) || cantidad <= 0)
+      return setError("Cantidad inválida");
 
     try {
       setSaving(true);
@@ -87,7 +113,9 @@ export default function InventoryPage({ token }) {
       // Actualiza stock del listado
       setItems((list) =>
         list.map((p) =>
-          p.id === current.id ? { ...p, stock_actual: body.producto.stock_actual } : p
+          p.id === current.id
+            ? { ...p, stock_actual: body.producto.stock_actual }
+            : p
         )
       );
       setShowAdj(false);
@@ -98,22 +126,64 @@ export default function InventoryPage({ token }) {
     }
   };
 
-  const filtered = items.filter((p) =>
-    (p.codigo + " " + p.nombre).toLowerCase().includes(q.toLowerCase())
-  );
-
   return (
     <div className="min-h-screen bg-sapphire-50">
       <div className="w-full px-4 md:px-6 py-6">
-        {/* Encabezado */}
-        <div className="mb-4 flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-sapphire-900 m-0">Inventario</h1>
-          <input
-            placeholder="Buscar por código o nombre"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            className="w-72 rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 outline-none focus:border-sapphire-400 focus:ring-2 focus:ring-sapphire-400/40"
-          />
+        {/* Header */}
+        <div className="mb-4 flex items-center justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-glass">
+          <h1 className="m-0 text-2xl font-bold text-sapphire-900">Inventario</h1>
+          <button
+            onClick={fetchAll}
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+          >
+            Refrescar
+          </button>
+        </div>
+
+        {/* Gestión de inventario (Buscador) */}
+        <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-glass">
+          <h3 className="mb-3 text-base font-semibold text-sapphire-900">
+            Gestión de inventario
+          </h3>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              applyFilters();
+            }}
+            className="grid items-end gap-3 md:grid-cols-2 lg:grid-cols-3"
+          >
+            <Field label="Nombre">
+              <input
+                value={qNombre}
+                onChange={(e) => setQNombre(e.target.value)}
+                placeholder="Ej: mouse"
+                className={inputCls}
+              />
+            </Field>
+            <Field label="Código">
+              <input
+                value={qCodigo}
+                onChange={(e) => setQCodigo(e.target.value)}
+                placeholder="Empieza por…"
+                className={inputCls}
+              />
+            </Field>
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                className="rounded-lg bg-sapphire-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sapphire-700"
+              >
+                Aplicar filtros
+              </button>
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+              >
+                Limpiar
+              </button>
+            </div>
+          </form>
         </div>
 
         {/* Tarjeta listado */}
@@ -142,8 +212,11 @@ export default function InventoryPage({ token }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((p) => (
-                    <tr key={p.id} className="border-b border-slate-100 hover:bg-slate-50">
+                  {filteredItems.map((p) => (
+                    <tr
+                      key={p.id}
+                      className="border-b border-slate-100 hover:bg-slate-50"
+                    >
                       <Td>{p.codigo}</Td>
                       <Td>{p.nombre}</Td>
                       <Td>
@@ -169,7 +242,7 @@ export default function InventoryPage({ token }) {
                       </Td>
                     </tr>
                   ))}
-                  {filtered.length === 0 && (
+                  {filteredItems.length === 0 && (
                     <tr>
                       <Td colSpan={6}>Sin resultados</Td>
                     </tr>
@@ -185,7 +258,7 @@ export default function InventoryPage({ token }) {
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
             <div className="w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl">
               <div className="mb-2 flex items-center justify-between">
-                <h3 className="text-lg font-semibold text-slate-900 m-0">
+                <h3 className="m-0 text-lg font-semibold text-slate-900">
                   Entrada de stock — {current.codigo} · {current.nombre}
                 </h3>
                 <button
@@ -203,9 +276,12 @@ export default function InventoryPage({ token }) {
                     <input
                       value={form.cantidad}
                       onChange={(e) =>
-                        setForm((f) => ({ ...f, cantidad: e.target.value.replace(/\D/g, "") }))
+                        setForm((f) => ({
+                          ...f,
+                          cantidad: e.target.value.replace(/\D/g, ""),
+                        }))
                       }
-                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 outline-none focus:border-sapphire-400 focus:ring-2 focus:ring-sapphire-400/40"
+                      className={inputCls}
                     />
                   </label>
                   <div className="flex flex-col gap-1 text-sm text-slate-700">
@@ -222,7 +298,9 @@ export default function InventoryPage({ token }) {
                   <span>Comentario (opcional)</span>
                   <textarea
                     value={form.comentario}
-                    onChange={(e) => setForm((f) => ({ ...f, comentario: e.target.value }))}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, comentario: e.target.value }))
+                    }
                     className="min-h-[80px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 outline-none focus:border-sapphire-400 focus:ring-2 focus:ring-sapphire-400/40"
                   />
                 </label>
@@ -253,7 +331,7 @@ export default function InventoryPage({ token }) {
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
             <div className="w-full max-w-4xl rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl">
               <div className="mb-2 flex items-center justify-between">
-                <h3 className="text-lg font-semibold text-slate-900 m-0">
+                <h3 className="m-0 text-lg font-semibold text-slate-900">
                   Kardex — {current.codigo} · {current.nombre}
                 </h3>
                 <button
@@ -279,7 +357,10 @@ export default function InventoryPage({ token }) {
                   </thead>
                   <tbody>
                     {moves.map((m) => (
-                      <tr key={m.id} className="border-b border-slate-100 hover:bg-slate-50">
+                      <tr
+                        key={m.id}
+                        className="border-b border-slate-100 hover:bg-slate-50"
+                      >
                         <Td>{new Date(m.fecha).toLocaleString()}</Td>
                         <Td>{m.tipo}</Td>
                         <Td>{m.cantidad}</Td>
@@ -319,3 +400,14 @@ function Td({ children, colSpan }) {
     </td>
   );
 }
+function Field({ label, children }) {
+  return (
+    <label className="flex flex-col gap-1 text-sm text-slate-700">
+      <span>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+const inputCls =
+  "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 outline-none focus:border-sapphire-400 focus:ring-2 focus:ring-sapphire-400/40";

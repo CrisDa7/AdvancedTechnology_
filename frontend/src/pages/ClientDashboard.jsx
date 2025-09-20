@@ -1,8 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
+import ChatWidgetClient from "../components/ChatWidgetClient"; // ⬅️ ajusta la ruta si es distinta
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
-export default function ClientDashboard({ token, user }) {
+export default function ClientDashboard({ token: tokenProp, user }) {
+  // Fallback: por si no llega en props
+  const token = tokenProp ?? localStorage.getItem("token") ?? "";
+
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -15,25 +19,26 @@ export default function ClientDashboard({ token, user }) {
   const [newMsg, setNewMsg] = useState("");
   const [sending, setSending] = useState(false);
 
-  // Cargar "mis servicios"
+  // ========== Data: Mis servicios ==========
+  const fetchMine = async () => {
+    try {
+      setLoading(true);
+      setError("");
+      const res = await fetch(`${API}/api/servicios/mios`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "No se pudo cargar tus servicios");
+      setItems(data);
+    } catch (e) {
+      setError(e.message || "Error al cargar");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    if (!token) return;
-    (async () => {
-      try {
-        setLoading(true);
-        setError("");
-        const res = await fetch(`${API}/api/servicios/mios`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data?.error || "No se pudo cargar tus servicios");
-        setItems(data);
-      } catch (e) {
-        setError(e.message || "Error al cargar");
-      } finally {
-        setLoading(false);
-      }
-    })();
+    if (token) fetchMine();
   }, [token]);
 
   // Abrir detalle y cargar comentarios
@@ -50,16 +55,10 @@ export default function ClientDashboard({ token, user }) {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
-      if (res.ok) setComments(data);
+      if (res.ok) setComments(Array.isArray(data) ? data : []);
     } finally {
       setLoadingComments(false);
     }
-
-    // Si implementaste "read receipts", aquí podrías marcar como leído.
-    // (Ignora si aún no tienes ese endpoint)
-    // for (const c of data.filter(c => c.autor_tipo !== 'cliente' && !c.leido_por_cliente)) {
-    //   try { await fetch(`${API}/api/servicios/${servicioId}/comentarios/${c.id}/read`, { method:'PATCH', headers:{ Authorization:`Bearer ${token}` } }); } catch {}
-    // }
   };
 
   // Enviar comentario (como cliente)
@@ -77,8 +76,18 @@ export default function ClientDashboard({ token, user }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "No se pudo enviar");
-      // algunos backends devuelven { ok:true, ...comentario }, otros solo el objeto
-      const created = data.comentario || data;
+
+      // Nuestro backend devuelve el comentario creado directamente
+      const created =
+        data?.comentario ||
+        data || {
+          mensaje: newMsg,
+          autor_tipo: "cliente",
+          autor_usuario: user?.usuario || "cliente",
+          created_at: new Date().toISOString(),
+          id: Math.random().toString(36).slice(2),
+        };
+
       setComments((arr) => [...arr, created]);
       setNewMsg("");
     } catch (e) {
@@ -90,10 +99,12 @@ export default function ClientDashboard({ token, user }) {
 
   if (!token) {
     return (
-      <div className="w-full px-4 md:px-6 py-6">
-        <p className="rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-yellow-800">
-          Inicia sesión para ver tus servicios.
-        </p>
+      <div className="min-h-screen bg-sapphire-50">
+        <div className="w-full px-4 md:px-6 py-6">
+          <p className="rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-yellow-800">
+            Inicia sesión para ver tus servicios.
+          </p>
+        </div>
       </div>
     );
   }
@@ -102,28 +113,10 @@ export default function ClientDashboard({ token, user }) {
     <div className="min-h-screen bg-sapphire-50">
       <div className="w-full px-4 md:px-6 py-6">
         {/* Header */}
-        <div className="mb-4 flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-sapphire-900">Mis servicios</h1>
+        <div className="mb-4 flex items-center justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-glass">
+          <h1 className="text-2xl font-bold text-sapphire-900 m-0">Mis servicios</h1>
           <button
-            onClick={() => {
-              // refrescar
-              (async () => {
-                try {
-                  setLoading(true);
-                  setError("");
-                  const res = await fetch(`${API}/api/servicios/mios`, {
-                    headers: { Authorization: `Bearer ${token}` },
-                  });
-                  const data = await res.json();
-                  if (!res.ok) throw new Error(data?.error || "No se pudo cargar");
-                  setItems(data);
-                } catch (e) {
-                  setError(e.message || "Error al cargar");
-                } finally {
-                  setLoading(false);
-                }
-              })();
-            }}
+            onClick={fetchMine}
             className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50"
           >
             Refrescar
@@ -162,7 +155,7 @@ export default function ClientDashboard({ token, user }) {
                 </thead>
                 <tbody>
                   {items.map((s) => (
-                    <tr key={s.id} className="border-b border-slate-100 hover:bg-slate-50">
+                    <tr key={s.id} className="border-t border-slate-200 hover:bg-slate-50">
                       <Td>{new Date(s.fecha_recepcion).toLocaleString()}</Td>
                       <Td>{s.codigo}</Td>
                       <Td>{s.tipo_equipo}</Td>
@@ -174,7 +167,9 @@ export default function ClientDashboard({ token, user }) {
                       </Td>
                       <Td>${Number(s.valor_total).toFixed(2)}</Td>
                       <Td>${Number(s.monto_abono || 0).toFixed(2)}</Td>
-                      <Td>${Number(s.valor_restante || 0).toFixed(2)}</Td>
+                      <Td>
+                        ${Number(s.valor_restante ?? (Number(s.valor_total) - Number(s.monto_abono || 0))).toFixed(2)}
+                      </Td>
                       <Td>
                         <button
                           onClick={() => openDetailFor(s.id)}
@@ -230,7 +225,7 @@ export default function ClientDashboard({ token, user }) {
                   </div>
                   <div className="text-xs text-slate-600">
                     Abono: ${Number(selected.monto_abono || 0).toFixed(2)} • Restante: $
-                    {Number(selected.valor_restante || 0).toFixed(2)}
+                    {Number(selected.valor_restante ?? (Number(selected.valor_total) - Number(selected.monto_abono || 0))).toFixed(2)}
                   </div>
                 </div>
               </div>
@@ -253,10 +248,10 @@ export default function ClientDashboard({ token, user }) {
                       }`}
                     >
                       <div className="flex items-center justify-between text-xs text-slate-500">
-                        <span>{c.autor_tipo === "cliente" ? "Tú" : `${c.autor_usuario || "Soporte"}`}</span>
-                        <span>{new Date(c.created_at || c.fecha_creado).toLocaleString()}</span>
+                        <span>{c.autor_tipo === "cliente" ? "Tú" : (c.autor_usuario || "Soporte")}</span>
+                        <span>{new Date(c.created_at || c.fecha_creado || Date.now()).toLocaleString()}</span>
                       </div>
-                      <div className="mt-1 text-sm text-slate-900">{c.mensaje}</div>
+                      <div className="mt-1 text-sm text-slate-900 whitespace-pre-wrap">{c.mensaje}</div>
                     </div>
                   ))}
                 </div>
@@ -284,12 +279,19 @@ export default function ClientDashboard({ token, user }) {
           </div>
         )}
       </div>
+
+      {/* 👇 Chat flotante (igual que admin), DENTRO del return */}
+      {token && <ChatWidgetClient token={token} />}
     </div>
   );
 }
 
 /* ---------- helpers UI ---------- */
-function Th({ children }) { return <th className="px-3 py-2">{children}</th>; }
-function Td({ children }) { return <td className="px-3 py-2">{children}</td>; }
+function Th({ children }) {
+  return <th className="px-3 py-2">{children}</th>;
+}
+function Td({ children }) {
+  return <td className="px-3 py-2">{children}</td>;
+}
 const inputCls =
   "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 outline-none focus:border-sapphire-400 focus:ring-2 focus:ring-sapphire-400/40";

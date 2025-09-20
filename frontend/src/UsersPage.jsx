@@ -1,16 +1,25 @@
-import { useEffect, useMemo, useState } from "react";
+// src/pages/UsersPage.jsx
+// Gestión de usuarios (admin)
+// - Lista, filtros locales, crear/editar, cambiar estado, eliminar (reglas del backend)
+// - Comentarios inline para que sepas qué hace cada bloque
+
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
 export default function UsersPage({ token }) {
+  /* --------------------------- estado principal --------------------------- */
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // --- Ocultos en la UI (cuando eliminas a un INACTIVO) ---
+  // Para evitar fugas si navegas rápido
+  const abortRef = useRef(null);
+
+  // Ocultar visualmente (no borra en BD) cuando el estado es "inactivo"
   const [hiddenIds, setHiddenIds] = useState(() => new Set());
 
-  // Crear
+  /* ------------------------------- crear --------------------------------- */
   const [openCreate, setOpenCreate] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState({
@@ -23,7 +32,7 @@ export default function UsersPage({ token }) {
     estado: "activo",
   });
 
-  // Editar
+  /* ------------------------------- editar -------------------------------- */
   const [openEdit, setOpenEdit] = useState(false);
   const [editUser, setEditUser] = useState(null);
   const [editForm, setEditForm] = useState({
@@ -38,23 +47,22 @@ export default function UsersPage({ token }) {
   });
   const [savingEdit, setSavingEdit] = useState(false);
 
-  // Cambiar estado
+  /* --------------------------- cambiar estado ---------------------------- */
   const [openEstado, setOpenEstado] = useState(false);
   const [estadoUser, setEstadoUser] = useState(null);
   const [nuevoEstado, setNuevoEstado] = useState("activo");
   const [savingEstado, setSavingEstado] = useState(false);
 
-  // Historial
+  /* ------------------------------- historial ----------------------------- */
   const [openInfo, setOpenInfo] = useState(false);
   const [infoUser, setInfoUser] = useState(null);
 
-  // Filtros (formulario)
+  /* -------------------------------- filtros ------------------------------ */
   const [fNombre, setFNombre] = useState("");
   const [fCedula, setFCedula] = useState("");
   const [fRol, setFRol] = useState("Todos");
   const [fEstado, setFEstado] = useState("Todos");
 
-  // Filtros aplicados
   const [q, setQ] = useState({
     nombre: "",
     cedula: "",
@@ -62,10 +70,11 @@ export default function UsersPage({ token }) {
     estado: "Todos",
   });
 
+  /* ---------------------------- validaciones ----------------------------- */
   const rules = useMemo(
     () => ({
       nombre_completo: /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ ]+$/,
-      contrasena: /[A-Z]/,
+      contrasena: /[A-Z]/, // al menos 1 mayúscula
       celular: /^\d{10}$/,
       cedula: /^\d{10}$/,
       rol: ["administrador", "empleado"],
@@ -96,41 +105,70 @@ export default function UsersPage({ token }) {
     return errs;
   };
 
+  /* ---------------------------- utilidades UI ---------------------------- */
+  // Solo dígitos para campos numéricos (celular/cedula)
+  const onlyDigits = (v, max = 10) => v.replace(/\D/g, "").slice(0, max);
+
+  /* --------------------------------- data -------------------------------- */
   const fetchUsers = async () => {
     try {
       setLoading(true);
       setError("");
+
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
       const res = await fetch(`${API}/api/users`, {
         headers: { Authorization: token ? `Bearer ${token}` : "" },
+        signal: controller.signal,
       });
       if (!res.ok) throw new Error("No se pudo obtener usuarios");
       const data = await res.json();
       setUsers(data);
-      setHiddenIds(new Set()); // reset ocultos al refrescar
+      setHiddenIds(new Set()); // resetea ocultos al refrescar
     } catch (e) {
-      setError(e.message || "Error al cargar usuarios");
+      if (e.name !== "AbortError") setError(e.message || "Error al cargar usuarios");
     } finally {
       setLoading(false);
     }
   };
-  useEffect(() => { if (token) fetchUsers(); }, [token]);
 
-  /* ---------- Crear ---------- */
+  useEffect(() => {
+    if (token) fetchUsers();
+    return () => abortRef.current?.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  /* ------------------------------- crear --------------------------------- */
   const onChangeCreate = (e) => {
     const { name, value } = e.target;
+    if (name === "celular" || name === "cedula") {
+      return setForm((f) => ({ ...f, [name]: onlyDigits(value) }));
+    }
     setForm((f) => ({ ...f, [name]: value }));
   };
-  const resetCreate = () => setForm({
-    nombre_completo: "", usuario: "", contrasena: "",
-    celular: "", cedula: "", rol: "empleado", estado: "activo"
-  });
+
+  const resetCreate = () =>
+    setForm({
+      nombre_completo: "",
+      usuario: "",
+      contrasena: "",
+      celular: "",
+      cedula: "",
+      rol: "empleado",
+      estado: "activo",
+    });
+
   const submitCreate = async (e) => {
     e.preventDefault();
     const errs = validateCreate();
     if (Object.keys(errs).length) return setError(Object.values(errs)[0]);
     if (!window.confirm("¿Seguro que deseas crear este usuario?")) return;
+
     try {
-      setSubmitting(true); setError("");
+      setSubmitting(true);
+      setError("");
       const res = await fetch(`${API}/api/users`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -139,31 +177,40 @@ export default function UsersPage({ token }) {
       const body = await res.json();
       if (!res.ok) throw new Error(body?.error || "Error al crear usuario");
       setUsers((u) => [body, ...u]);
-      resetCreate(); setOpenCreate(false);
+      resetCreate();
+      setOpenCreate(false);
     } catch (e) {
       setError(e.message || "Error al crear usuario");
-    } finally { setSubmitting(false); }
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  /* ---------- Editar ---------- */
+  /* ------------------------------- editar -------------------------------- */
   const openEditFor = (u) => {
     setEditUser(u);
     setEditForm({
       id: u.id,
       nombre_completo: u.nombre_completo,
       usuario: u.usuario,
-      contrasena: "",           // vacío -> no cambia
-      celular: u.celular,
-      cedula: u.cedula,
+      contrasena: "", // vacío -> no cambia
+      celular: String(u.celular || ""),
+      cedula: String(u.cedula || ""),
       rol: u.rol,
       estado: u.estado,
     });
+    setError("");
     setOpenEdit(true);
   };
+
   const onChangeEdit = (e) => {
     const { name, value } = e.target;
+    if (name === "celular" || name === "cedula") {
+      return setEditForm((f) => ({ ...f, [name]: onlyDigits(value) }));
+    }
     setEditForm((f) => ({ ...f, [name]: value }));
   };
+
   const submitEdit = async (e) => {
     e.preventDefault();
     const errs = validateEdit();
@@ -171,14 +218,16 @@ export default function UsersPage({ token }) {
     if (!window.confirm("¿Seguro que deseas actualizar la información?")) return;
 
     try {
-      setSavingEdit(true); setError("");
+      setSavingEdit(true);
+      setError("");
+
       const payload = {
         nombre_completo: editForm.nombre_completo,
         usuario: editForm.usuario,
         celular: editForm.celular,
         cedula: editForm.cedula,
         rol: editForm.rol,
-        estado: editForm.estado, // aunque está deshabilitado en UI
+        estado: editForm.estado, // aunque en UI está deshabilitado
       };
       if (editForm.contrasena) payload.contrasena = editForm.contrasena;
 
@@ -200,19 +249,22 @@ export default function UsersPage({ token }) {
     }
   };
 
-  /* ---------- Cambiar estado ---------- */
+  /* --------------------------- cambiar estado ---------------------------- */
   const openEstadoFor = (u) => {
     setEstadoUser(u);
     setNuevoEstado(u.estado);
+    setError("");
     setOpenEstado(true);
   };
+
   const submitEstado = async (e) => {
     e.preventDefault();
     if (!estadoUser) return;
     if (!window.confirm(`¿Actualizar estado de ${estadoUser.usuario} a "${nuevoEstado}"?`)) return;
 
     try {
-      setSavingEstado(true); setError("");
+      setSavingEstado(true);
+      setError("");
       const res = await fetch(`${API}/api/users/${estadoUser.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -220,8 +272,14 @@ export default function UsersPage({ token }) {
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body?.error || "Error actualizando estado");
+
       setUsers((list) => list.map((x) => (x.id === body.id ? body : x)));
-      setHiddenIds(prev => { const n = new Set(prev); n.delete(body.id); return n; });
+      // Si estaba oculto y ahora cambió, vuelve a aparecer
+      setHiddenIds((prev) => {
+        const n = new Set(prev);
+        n.delete(body.id);
+        return n;
+      });
       setOpenEstado(false);
       setEstadoUser(null);
     } catch (e) {
@@ -231,18 +289,23 @@ export default function UsersPage({ token }) {
     }
   };
 
-  /* ---------- Eliminar ---------- */
+  /* -------------------------------- borrar ------------------------------- */
   const deleteUser = async (u) => {
     if (u.estado === "activo") return;
 
     if (u.estado === "inactivo") {
+      // Ocultar en UI (no elimina en BD)
       if (!window.confirm(`Quitar a "${u.usuario}" de la lista (no elimina en BD)?`)) return;
-      setHiddenIds(prev => { const n = new Set(prev); n.add(u.id); return n; });
+      setHiddenIds((prev) => {
+        const n = new Set(prev);
+        n.add(u.id);
+        return n;
+      });
       alert("Ocultado de la lista. Usa 'Refrescar' o filtra por Estado=Inactivo para verlo nuevamente.");
       return;
     }
 
-    // estado === 'dado de baja' → borrar en BD
+    // "dado de baja" → elimina en BD
     if (!window.confirm(`Eliminar PERMANENTEMENTE a "${u.usuario}"? Esta acción no se puede deshacer.`)) return;
     try {
       const res = await fetch(`${API}/api/users/${u.id}`, {
@@ -252,16 +315,23 @@ export default function UsersPage({ token }) {
       const body = await res.json();
       if (!res.ok) throw new Error(body?.error || "No se pudo eliminar");
       setUsers((list) => list.filter((x) => x.id !== u.id));
-      setHiddenIds(prev => { const n = new Set(prev); n.delete(u.id); return n; });
+      setHiddenIds((prev) => {
+        const n = new Set(prev);
+        n.delete(u.id);
+        return n;
+      });
     } catch (e) {
       setError(e.message || "Error eliminando usuario");
     }
   };
 
-  /* ---------- Historial ---------- */
-  const openInfoFor = (u) => { setInfoUser(u); setOpenInfo(true); };
+  /* ------------------------------- historial ----------------------------- */
+  const openInfoFor = (u) => {
+    setInfoUser(u);
+    setOpenInfo(true);
+  };
 
-  /* ---------- Filtros ---------- */
+  /* -------------------------------- filtros ------------------------------ */
   const aplicarFiltros = () => {
     setQ({
       nombre: fNombre.trim(),
@@ -270,6 +340,7 @@ export default function UsersPage({ token }) {
       estado: fEstado,
     });
   };
+
   const limpiarFiltros = () => {
     setFNombre("");
     setFCedula("");
@@ -278,19 +349,23 @@ export default function UsersPage({ token }) {
     setQ({ nombre: "", cedula: "", rol: "Todos", estado: "Todos" });
   };
 
-  // Filtrado local
-  const filtered = users.filter((u) => {
-    // Si NO hay estado específico, excluimos los ocultos
-    if (q.estado === "Todos" && hiddenIds.has(u.id)) return false;
+  // Filtro en memoria (useMemo evita recomputar si nada relevante cambió)
+  const filtered = useMemo(() => {
+    const norm = (s) => String(s || "").toLowerCase();
+    return users.filter((u) => {
+      // Excluir ocultos si no hay filtro por estado
+      if (q.estado === "Todos" && hiddenIds.has(u.id)) return false;
 
-    if (q.nombre && !u.nombre_completo.toLowerCase().includes(q.nombre.toLowerCase())) return false;
-    if (q.cedula && !String(u.cedula || "").startsWith(q.cedula)) return false;
-    if (q.rol !== "Todos" && u.rol !== q.rol.toLowerCase()) return false;
-    if (q.estado !== "Todos" && u.estado !== q.estado.toLowerCase()) return false;
+      if (q.nombre && !norm(u.nombre_completo).includes(norm(q.nombre))) return false;
+      if (q.cedula && !String(u.cedula || "").startsWith(q.cedula)) return false;
+      if (q.rol !== "Todos" && u.rol !== q.rol.toLowerCase()) return false;
+      if (q.estado !== "Todos" && u.estado !== q.estado.toLowerCase()) return false;
 
-    return true;
-  });
+      return true;
+    });
+  }, [users, q, hiddenIds]);
 
+  /* -------------------------------- renders ------------------------------ */
   if (!token) {
     return (
       <div className="w-full px-6 py-6">
@@ -307,18 +382,22 @@ export default function UsersPage({ token }) {
         {/* Título */}
         <h1 className="mb-4 text-2xl font-bold text-sapphire-900">Usuarios</h1>
 
-        {/* Gestión + Acciones (Refrescar SOLO aquí) */}
+        {/* Header de acciones */}
         <div className="mb-4 flex items-center justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-glass">
           <h2 className="m-0 text-lg font-semibold text-sapphire-800">Gestión de usuarios</h2>
           <div className="flex gap-2">
             <button
               onClick={fetchUsers}
-              className="rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-200"
+              disabled={loading}
+              className="rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-200 disabled:opacity-60"
             >
               Refrescar
             </button>
             <button
-              onClick={() => { setError(""); setOpenCreate(true); }}
+              onClick={() => {
+                setError("");
+                setOpenCreate(true);
+              }}
               className="rounded-lg bg-sapphire-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sapphire-700 active:translate-y-px"
             >
               Agregar usuario
@@ -326,7 +405,7 @@ export default function UsersPage({ token }) {
           </div>
         </div>
 
-        {/* Filtros (SIN botón Refrescar aquí) */}
+        {/* Filtros */}
         <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-glass">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
             <Field label="Nombre">
@@ -340,8 +419,9 @@ export default function UsersPage({ token }) {
             <Field label="Cédula">
               <input
                 value={fCedula}
-                onChange={(e) => setFCedula(e.target.value)}
+                onChange={(e) => setFCedula(onlyDigits(e.target.value))}
                 placeholder="Empieza por…"
+                inputMode="numeric"
                 className={inputCls}
               />
             </Field>
@@ -389,7 +469,7 @@ export default function UsersPage({ token }) {
           )}
 
           {loading ? (
-            <p className="text-slate-600">Cargando...</p>
+            <p className="text-slate-600">Cargando…</p>
           ) : filtered.length === 0 ? (
             <p className="text-slate-600">Sin resultados.</p>
           ) : (
@@ -485,7 +565,12 @@ export default function UsersPage({ token }) {
             <form onSubmit={submitCreate} className="grid gap-3">
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 <Field label="Nombre completo">
-                  <input name="nombre_completo" value={form.nombre_completo} onChange={onChangeCreate} className={inputCls} />
+                  <input
+                    name="nombre_completo"
+                    value={form.nombre_completo}
+                    onChange={onChangeCreate}
+                    className={inputCls}
+                  />
                 </Field>
                 <Field label="Usuario">
                   <input name="usuario" value={form.usuario} onChange={onChangeCreate} className={inputCls} />
@@ -493,15 +578,33 @@ export default function UsersPage({ token }) {
               </div>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 <Field label="Contraseña (1 mayúscula)">
-                  <input type="password" name="contrasena" value={form.contrasena} onChange={onChangeCreate} className={inputCls} />
+                  <input
+                    type="password"
+                    name="contrasena"
+                    value={form.contrasena}
+                    onChange={onChangeCreate}
+                    className={inputCls}
+                  />
                 </Field>
                 <Field label="Celular (10 dígitos)">
-                  <input name="celular" value={form.celular} onChange={onChangeCreate} className={inputCls} />
+                  <input
+                    name="celular"
+                    value={form.celular}
+                    onChange={onChangeCreate}
+                    inputMode="numeric"
+                    className={inputCls}
+                  />
                 </Field>
               </div>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 <Field label="Cédula (10 dígitos)">
-                  <input name="cedula" value={form.cedula} onChange={onChangeCreate} className={inputCls} />
+                  <input
+                    name="cedula"
+                    value={form.cedula}
+                    onChange={onChangeCreate}
+                    inputMode="numeric"
+                    className={inputCls}
+                  />
                 </Field>
                 <Field label="Rol">
                   <select name="rol" value={form.rol} onChange={onChangeCreate} className={inputCls}>
@@ -511,8 +614,22 @@ export default function UsersPage({ token }) {
                 </Field>
               </div>
               <div className="flex items-center justify-end gap-2">
-                <button type="button" onClick={() => { setOpenCreate(false); resetCreate(); setError(""); }} className="rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-200">Cancelar</button>
-                <button type="submit" disabled={submitting} className="rounded-lg bg-sapphire-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sapphire-700 disabled:opacity-70">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpenCreate(false);
+                    resetCreate();
+                    setError("");
+                  }}
+                  className="rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-200"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="rounded-lg bg-sapphire-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sapphire-700 disabled:opacity-70"
+                >
                   {submitting ? "Guardando..." : "Guardar"}
                 </button>
               </div>
@@ -520,7 +637,7 @@ export default function UsersPage({ token }) {
           </Modal>
         )}
 
-        {/* MODAL: Editar (Estado deshabilitado) */}
+        {/* MODAL: Editar (estado se cambia en su modal dedicado) */}
         {openEdit && editUser && (
           <Modal onClose={() => setOpenEdit(false)} title={`Editar: ${editUser.usuario}`}>
             <FormError error={error} />
@@ -538,12 +655,12 @@ export default function UsersPage({ token }) {
                   <input type="password" name="contrasena" value={editForm.contrasena} onChange={onChangeEdit} className={inputCls} />
                 </Field>
                 <Field label="Celular (10 dígitos)">
-                  <input name="celular" value={editForm.celular} onChange={onChangeEdit} className={inputCls} />
+                  <input name="celular" value={editForm.celular} onChange={onChangeEdit} inputMode="numeric" className={inputCls} />
                 </Field>
               </div>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 <Field label="Cédula (10 dígitos)">
-                  <input name="cedula" value={editForm.cedula} onChange={onChangeEdit} className={inputCls} />
+                  <input name="cedula" value={editForm.cedula} onChange={onChangeEdit} inputMode="numeric" className={inputCls} />
                 </Field>
                 <Field label="Rol">
                   <select name="rol" value={editForm.rol} onChange={onChangeEdit} className={inputCls}>
@@ -560,8 +677,22 @@ export default function UsersPage({ token }) {
                 </select>
               </Field>
               <div className="flex items-center justify-end gap-2">
-                <button type="button" onClick={() => { setOpenEdit(false); setEditUser(null); setError(""); }} className="rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-200">Cancelar</button>
-                <button type="submit" disabled={savingEdit} className="rounded-lg bg-sapphire-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sapphire-700 disabled:opacity-70">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpenEdit(false);
+                    setEditUser(null);
+                    setError("");
+                  }}
+                  className="rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-200"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingEdit}
+                  className="rounded-lg bg-sapphire-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sapphire-700 disabled:opacity-70"
+                >
                   {savingEdit ? "Guardando..." : "Guardar cambios"}
                 </button>
               </div>
@@ -581,11 +712,13 @@ export default function UsersPage({ token }) {
                 </select>
               </Field>
               <div className="text-sm text-slate-600">
-                Nota: si el usuario está <b>inactivo</b> no podrá iniciar sesión.  
+                Nota: si el usuario está <b>inactivo</b> no podrá iniciar sesión.
                 Si está <b>dado de baja</b>, podrás eliminarlo definitivamente.
               </div>
               <div className="flex items-center justify-end gap-2">
-                <button type="button" onClick={() => setOpenEstado(false)} className="rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-200">Cancelar</button>
+                <button type="button" onClick={() => setOpenEstado(false)} className="rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-200">
+                  Cancelar
+                </button>
                 <button type="submit" disabled={savingEstado} className="rounded-lg bg-sapphire-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sapphire-700 disabled:opacity-70">
                   {savingEstado ? "Actualizando..." : "Actualizar estado"}
                 </button>
@@ -613,14 +746,16 @@ export default function UsersPage({ token }) {
   );
 }
 
-/* ---------- Helpers UI ---------- */
+/* ------------------------------ helpers UI ------------------------------- */
 function Modal({ title, onClose, children }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
       <div className="w-full max-w-3xl rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl">
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-lg font-semibold text-slate-900">{title}</h3>
-          <button onClick={onClose} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 hover:bg-slate-50">✕</button>
+          <button onClick={onClose} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 hover:bg-slate-50">
+            ✕
+          </button>
         </div>
         {children}
       </div>
@@ -651,6 +786,12 @@ function FormError({ error }) {
     </div>
   );
 }
-function Th({ children }) { return <th className="px-3 py-2">{children}</th>; }
-function Td({ children }) { return <td className="px-3 py-2">{children}</td>; }
-const inputCls = "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 outline-none focus:border-sapphire-400 focus:ring-2 focus:ring-sapphire-400/40";
+function Th({ children }) {
+  return <th className="px-3 py-2">{children}</th>;
+}
+function Td({ children }) {
+  return <td className="px-3 py-2">{children}</td>;
+}
+
+const inputCls =
+  "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 outline-none focus:border-sapphire-400 focus:ring-2 focus:ring-sapphire-400/40";
